@@ -141,7 +141,9 @@ export default function extension(pi: ExtensionAPI) {
   // Stable effort object: /effort and keyword arming close over this reference.
   // When a handoff brings a different EffortState, copy the level in place
   // rather than rebinding the local binding.
-  const effort: EffortState = (previousRuntime ?? runtimeClaim.versionMismatch)?.effort ?? createEffortState();
+  const defaultEffort = loadWorkflowSettings({ cwd }).defaultEffort;
+  const effort: EffortState =
+    (previousRuntime ?? runtimeClaim.versionMismatch)?.effort ?? createEffortState(defaultEffort);
   if (previousRuntime?.effort && previousRuntime.effort !== effort) {
     effort.level = previousRuntime.effort.level;
   }

@@ -8,9 +8,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { MAX_AGENT_RETRIES, MAX_CONCURRENCY, normalizeKeywordTriggerWord } from "./config.js";
+import type { EffortLevel } from "./effort-command.js";
 import { workflowHomeDir, workflowProjectPaths } from "./workflow-paths.js";
 
 export interface WorkflowSettings {
+  /** Default standing orchestration effort for new Pi sessions. */
+  defaultEffort?: EffortLevel;
   keywordTriggerEnabled?: boolean;
   /** Literal keyword that arms workflows mode from interactive input. */
   keywordTriggerWord?: string;
@@ -132,6 +135,9 @@ function normalizeSettings(value: unknown): WorkflowSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const raw = value as Record<string, unknown>;
   const settings: WorkflowSettings = {};
+  if (raw.defaultEffort === "off" || raw.defaultEffort === "high" || raw.defaultEffort === "ultra") {
+    settings.defaultEffort = raw.defaultEffort;
+  }
   if (typeof raw.keywordTriggerEnabled === "boolean") {
     settings.keywordTriggerEnabled = raw.keywordTriggerEnabled;
   }

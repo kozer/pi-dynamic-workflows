@@ -21,8 +21,8 @@ export interface EffortState {
   level: EffortLevel;
 }
 
-export function createEffortState(): EffortState {
-  return { level: "off" };
+export function createEffortState(initial: EffortLevel = "off"): EffortState {
+  return { level: initial };
 }
 
 const HIGH_DIRECTIVE =

@@ -33,6 +33,21 @@ describe("workflow settings", () => {
     });
   });
 
+  it("saves, loads, and normalizes the default effort", () => {
+    withSettingsPath((settingsPath) => {
+      saveWorkflowSettings({ defaultEffort: "high" }, settingsPath);
+      assert.deepEqual(loadWorkflowSettings(settingsPath), { defaultEffort: "high" });
+
+      writeFileSync(settingsPath, JSON.stringify({ defaultEffort: "ultra" }), "utf-8");
+      assert.deepEqual(loadWorkflowSettings(settingsPath), { defaultEffort: "ultra" });
+
+      for (const defaultEffort of ["", "medium", 42, false]) {
+        writeFileSync(settingsPath, JSON.stringify({ defaultEffort }), "utf-8");
+        assert.deepEqual(loadWorkflowSettings(settingsPath), {});
+      }
+    });
+  });
+
   it("saves and loads keyword trigger preferences", () => {
     withSettingsPath((settingsPath) => {
       saveWorkflowSettings({ keywordTriggerEnabled: false, keywordTriggerWord: "pi-workflow" }, settingsPath);

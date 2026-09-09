@@ -3,6 +3,11 @@ import test from "node:test";
 import { createEffortState, effortDirective, isSubstantive, registerEffortCommand } from "../src/effort-command.js";
 import { buildArmedWorkflowPrompt } from "../src/workflow-editor.js";
 
+test("createEffortState accepts a configured default", () => {
+  assert.equal(createEffortState().level, "off");
+  assert.equal(createEffortState("high").level, "high");
+});
+
 test("effortDirective shapes fan-out without inventing token budgets", () => {
   const high = effortDirective("high") ?? "";
   const ultra = effortDirective("ultra") ?? "";
