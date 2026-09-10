@@ -17,6 +17,8 @@ import { existsSync } from "node:fs";
 import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
   Container,
+  getKeybindings,
+  Input,
   type SelectItem,
   SelectList,
   type SelectListTheme,
@@ -179,7 +181,8 @@ async function selectModel(
 
   return ctx.ui.custom<string | null>((tui: TUI, theme: Theme, _keybindings, done) => {
     const container = new Container();
-    let query = "";
+    const searchInput = new Input();
+    const keybindings = getKeybindings();
     const selectTheme: SelectListTheme = {
       selectedPrefix: (t: string) => theme.bg("selectedBg", theme.fg("accent", t)),
       selectedText: (t: string) => theme.bg("selectedBg", theme.bold(t)),
@@ -190,12 +193,12 @@ async function selectModel(
 
     let selectList: SelectList;
     const createSelectList = () => {
-      const items: SelectItem[] = filterModelSpecs(specs, query).map((m) => ({
+      const items: SelectItem[] = filterModelSpecs(specs, searchInput.getValue()).map((m) => ({
         value: m,
         label: m === sessionModel ? `${m} (current session)` : m,
       }));
       const next = new SelectList(items, 12, selectTheme);
-      const preferred = currentParts.modelSpec ?? (query ? undefined : sessionModel);
+      const preferred = currentParts.modelSpec ?? (searchInput.getValue() ? undefined : sessionModel);
       if (preferred) {
         const idx = items.findIndex((item) => item.value === preferred);
         if (idx >= 0) next.setSelectedIndex(idx);
@@ -210,7 +213,8 @@ async function selectModel(
       render: (w: number) => {
         container.clear();
         container.addChild(new Text(theme.fg("accent", title), 1, 0));
-        container.addChild(new Text(theme.fg("muted", `Search: ${query || "all models"}`), 1, 0));
+        container.addChild(new Text(theme.fg("muted", `Search: ${searchInput.getValue() || "all models"}`), 1, 0));
+        container.addChild(searchInput);
         container.addChild(new Spacer(1));
         container.addChild(selectList);
         container.addChild(new Spacer(1));
@@ -219,15 +223,21 @@ async function selectModel(
       },
       invalidate: () => container.invalidate(),
       handleInput: (data: string) => {
-        selectList.handleInput(data);
-        if (data === "\b" || data === String.fromCharCode(127)) query = query.slice(0, -1);
-        else if (/^[\\x20-\\x7e]$/.test(data)) query += data;
-        else {
-          tui.requestRender();
+        if (
+          keybindings.matches(data, "tui.select.up") ||
+          keybindings.matches(data, "tui.select.down") ||
+          keybindings.matches(data, "tui.select.confirm") ||
+          keybindings.matches(data, "tui.select.cancel")
+        ) {
+          selectList.handleInput(data);
           return;
         }
-        selectList = createSelectList();
-        tui.requestRender();
+        const before = searchInput.getValue();
+        searchInput.handleInput(data);
+        if (searchInput.getValue() !== before) {
+          selectList = createSelectList();
+          tui.requestRender();
+        }
       },
     };
   });
