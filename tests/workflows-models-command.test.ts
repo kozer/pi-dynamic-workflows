@@ -110,6 +110,19 @@ describe("workflows-models-command", () => {
       assert.equal(typeof result.small, "string", "should still be a string");
     });
 
+    it("filters models by a search query", async () => {
+      const { filterModelSpecs } = await import("../src/workflows-models-command.js");
+      assert.deepEqual(filterModelSpecs(["openai/gpt-5", "anthropic/claude", "local/qwen"], "GPT"), ["openai/gpt-5"]);
+    });
+
+    it("applies one model to every tier while preserving thinking levels", async () => {
+      const { applyModelToAllTiers } = await import("../src/workflows-models-command.js");
+      assert.deepEqual(
+        applyModelToAllTiers({ small: "old-small", medium: "old-medium:high", big: "old-big:xhigh" }, "openai/gpt-5"),
+        { small: "openai/gpt-5", medium: "openai/gpt-5:high", big: "openai/gpt-5:xhigh" },
+      );
+    });
+
     it("lets users choose a thinking level for the selected model", async () => {
       const { editSingleTier } = await import("../src/workflows-models-command.js");
       let thinkingOptions: string[] = [];

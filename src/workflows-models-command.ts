@@ -88,7 +88,7 @@ export function registerWorkflowModelsCommand(pi: ExtensionAPI): void {
           menuOptions.push(`${name} tier → ${model}`);
         }
         menuOptions.push("─".repeat(30));
-
+        menuOptions.push("Set one model for all tiers");
         menuOptions.push(scope === "project" ? "Switch to global" : "Switch to project");
         menuOptions.push("Reset to defaults");
         menuOptions.push(dirty ? "Save and exit" : "Exit");
@@ -110,6 +110,12 @@ export function registerWorkflowModelsCommand(pi: ExtensionAPI): void {
             }
             break;
           }
+        }
+
+        if (choice === "Set one model for all tiers") {
+          const updatedTiers = await editAllTiers(ctx, config.tiers);
+          if (updatedTiers !== null) ensureFresh({ ...config, tiers: updatedTiers });
+          continue;
         }
 
         if (choice === "Switch to global" || choice === "Switch to project") {
@@ -155,6 +161,78 @@ function fromThinkingChoice(choice: string | undefined): ModelThinkingLevel | un
   return THINKING_LEVELS.find((level) => level === choice);
 }
 
+export function filterModelSpecs(specs: string[], query: string): string[] {
+  const normalized = query.trim().toLowerCase();
+  return normalized ? specs.filter((spec) => spec.toLowerCase().includes(normalized)) : specs;
+}
+
+async function selectModel(
+  ctx: ExtensionCommandContext,
+  current: string | undefined,
+  title: string,
+): Promise<string | null> {
+  const sessionModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+  const available = listAvailableModelSpecs(ctx.modelRegistry);
+  const specs = [...new Set(sessionModel ? [sessionModel, ...available] : available)];
+  const knownSpecs = specs.length > 0 ? specs : undefined;
+  const currentParts = splitModelSpecThinking(current, knownSpecs);
+
+  return ctx.ui.custom<string | null>((tui: TUI, theme: Theme, _keybindings, done) => {
+    const container = new Container();
+    let query = "";
+    const selectTheme: SelectListTheme = {
+      selectedPrefix: (t: string) => theme.bg("selectedBg", theme.fg("accent", t)),
+      selectedText: (t: string) => theme.bg("selectedBg", theme.bold(t)),
+      description: (t: string) => theme.fg("muted", t),
+      scrollInfo: (t: string) => theme.fg("dim", t),
+      noMatch: (t: string) => theme.fg("warning", t),
+    };
+
+    let selectList: SelectList;
+    const createSelectList = () => {
+      const items: SelectItem[] = filterModelSpecs(specs, query).map((m) => ({
+        value: m,
+        label: m === sessionModel ? `${m} (current session)` : m,
+      }));
+      const next = new SelectList(items, 12, selectTheme);
+      const preferred = currentParts.modelSpec ?? (query ? undefined : sessionModel);
+      if (preferred) {
+        const idx = items.findIndex((item) => item.value === preferred);
+        if (idx >= 0) next.setSelectedIndex(idx);
+      }
+      next.onSelect = (item) => done(item.value);
+      next.onCancel = () => done(null);
+      return next;
+    };
+    selectList = createSelectList();
+
+    return {
+      render: (w: number) => {
+        container.clear();
+        container.addChild(new Text(theme.fg("accent", title), 1, 0));
+        container.addChild(new Text(theme.fg("muted", `Search: ${query || "all models"}`), 1, 0));
+        container.addChild(new Spacer(1));
+        container.addChild(selectList);
+        container.addChild(new Spacer(1));
+        container.addChild(new Text(theme.fg("dim", "type to search  ·  ↑↓ navigate  enter select  esc cancel"), 1, 0));
+        return container.render(w);
+      },
+      invalidate: () => container.invalidate(),
+      handleInput: (data: string) => {
+        selectList.handleInput(data);
+        if (data === "\b" || data === String.fromCharCode(127)) query = query.slice(0, -1);
+        else if (/^[\\x20-\\x7e]$/.test(data)) query += data;
+        else {
+          tui.requestRender();
+          return;
+        }
+        selectList = createSelectList();
+        tui.requestRender();
+      },
+    };
+  });
+}
+
 /**
  * Interactive editor for a single tier — scrollable model picker plus optional
  * thinking-level picker.
@@ -171,63 +249,16 @@ export async function editSingleTier(
   tiers: Record<string, string>,
   tierName: string,
 ): Promise<Record<string, string> | null> {
-  const available = listAvailableModelSpecs(ctx.modelRegistry);
-  const knownSpecs = available.length > 0 ? available : undefined;
   const current = tiers[tierName];
-  const currentParts = splitModelSpecThinking(current, knownSpecs);
-
-  // Build SelectItems: all available models as scrollable list
-  const items: SelectItem[] = available.map((m) => ({ value: m, label: m }));
-
-  const selectedModel = await ctx.ui.custom<string | null>((tui: TUI, theme: Theme, _keybindings, done) => {
-    const container = new Container();
-
-    // Title showing current model
-    const titleText = current
-      ? `Pick a model for "${tierName}" (current: ${current})`
-      : `Pick a model for "${tierName}"`;
-    container.addChild(new Text(theme.fg("accent", titleText), 1, 0));
-    container.addChild(new Spacer(1));
-
-    // SelectList theme
-    const selectTheme: SelectListTheme = {
-      selectedPrefix: (t: string) => theme.bg("selectedBg", theme.fg("accent", t)),
-      selectedText: (t: string) => theme.bg("selectedBg", theme.bold(t)),
-      description: (t: string) => theme.fg("muted", t),
-      scrollInfo: (t: string) => theme.fg("dim", t),
-      noMatch: (t: string) => theme.fg("warning", t),
-    };
-
-    const selectList = new SelectList(items, 12, selectTheme);
-
-    // Preselect the current base model even when the stored tier has :thinking.
-    if (currentParts.modelSpec) {
-      const idx = items.findIndex((i) => i.value === currentParts.modelSpec);
-      if (idx >= 0) selectList.setSelectedIndex(idx);
-    }
-
-    // Wire up callbacks
-    selectList.onSelect = (item) => done(item.value);
-    selectList.onCancel = () => done(null);
-
-    container.addChild(selectList);
-    container.addChild(new Spacer(1));
-    container.addChild(
-      new Text(theme.fg("dim", "↑↓ navigate  enter select  esc cancel  · thinking is chosen next"), 1, 0),
-    );
-
-    return {
-      render: (w: number) => container.render(w),
-      invalidate: () => container.invalidate(),
-      handleInput: (data: string) => {
-        selectList.handleInput(data);
-        tui.requestRender();
-      },
-    };
-  });
-
+  const selectedModel = await selectModel(
+    ctx,
+    current,
+    current ? `Pick a model for "${tierName}" (current: ${current})` : `Pick a model for "${tierName}"`,
+  );
   if (!selectedModel) return null;
 
+  const knownSpecs = listAvailableModelSpecs(ctx.modelRegistry);
+  const currentParts = splitModelSpecThinking(current, knownSpecs.length > 0 ? knownSpecs : undefined);
   const currentThinkingLabel = currentParts.thinkingLevel ?? DEFAULT_THINKING_CHOICE;
   const thinkingChoice = await ctx.ui.select(
     `Thinking for "${tierName}" tier (current: ${currentThinkingLabel})`,
@@ -241,4 +272,28 @@ export async function editSingleTier(
 
   ctx.ui.notify(`"${tierName}" tier → ${result}`, "info");
   return { ...tiers, [tierName]: result };
+}
+
+/** Apply one model to every tier while preserving each tier's thinking suffix. */
+export function applyModelToAllTiers(tiers: Record<string, string>, modelSpec: string): Record<string, string> {
+  const updated = Object.fromEntries(
+    Object.entries(tiers).map(([name, current]) => {
+      const { thinkingLevel } = splitModelSpecThinking(current);
+      return [name, formatModelSpecWithThinking(modelSpec, thinkingLevel)];
+    }),
+  );
+  return updated;
+}
+
+async function editAllTiers(
+  ctx: ExtensionCommandContext,
+  tiers: Record<string, string>,
+): Promise<Record<string, string> | null> {
+  const selectedModel = await selectModel(ctx, undefined, "Pick one model for all workflow tiers");
+  if (!selectedModel) return null;
+
+  const updated = applyModelToAllTiers(tiers, selectedModel);
+  if (JSON.stringify(updated) === JSON.stringify(tiers)) return null;
+  ctx.ui.notify(`All tiers → ${selectedModel} (thinking levels preserved)`, "info");
+  return updated;
 }
