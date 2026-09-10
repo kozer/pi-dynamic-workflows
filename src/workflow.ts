@@ -1,10 +1,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import vm from "node:vm";
 import type { Node } from "acorn";
 import { parse } from "acorn";
 import type { TSchema } from "typebox";
-import { type AgentRunOptions, WorkflowAgent, type WorkflowAgentOptions } from "./agent.js";
+import {
+  type AgentRunOptions,
+  WorkflowAgent,
+  type WorkflowAgentOptions,
+  type WorkflowAgentTranscript,
+} from "./agent.js";
 import type { AgentHistoryEntry } from "./agent-history.js";
 import {
   type AgentDefinition,
@@ -329,6 +336,17 @@ export interface WorkflowRunResult<T = unknown> {
     cacheRead?: number;
     cacheWrite?: number;
   };
+  transcriptDir?: string;
+  transcriptManifestPath?: string;
+  transcripts?: WorkflowAgentTranscript[];
+}
+
+export interface WorkflowTranscriptManifest {
+  workflow: { name: string; description: string };
+  transcriptDir: string;
+  createdAt: string;
+  outcome: { status: "success" | "error" | "aborted"; error?: string };
+  transcripts: WorkflowAgentTranscript[];
 }
 
 export interface AgentOptions<TSchemaDef extends TSchema | undefined = TSchema | undefined> {
@@ -443,15 +461,107 @@ const DETERMINISM_PRELUDE = [
   "}",
 ].join("\n");
 
+export function resolveWorkflowTranscriptDir(
+  input: { transcriptDir?: string; args?: unknown },
+  cwd: string,
+  meta: Pick<WorkflowMeta, "name">,
+): string {
+  if (input.transcriptDir) {
+    return path.isAbsolute(input.transcriptDir) ? input.transcriptDir : path.resolve(cwd, input.transcriptDir);
+  }
+  const outputDir =
+    input.args && typeof input.args === "object" && !Array.isArray(input.args)
+      ? (input.args as Record<string, unknown>).outputDir
+      : undefined;
+  if (typeof outputDir === "string" && outputDir.trim()) {
+    const resolvedOutputDir = path.isAbsolute(outputDir) ? outputDir : path.resolve(cwd, outputDir);
+    return path.join(resolvedOutputDir, "transcripts");
+  }
+  const safeName =
+    meta.name
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "workflow";
+  return path.join(cwd, ".pi", "workflow-transcripts", safeName);
+}
+
+export async function writeWorkflowTranscriptManifest(
+  transcriptDir: string,
+  meta: Pick<WorkflowMeta, "name" | "description">,
+  transcripts: WorkflowAgentTranscript[],
+  outcome: WorkflowTranscriptManifest["outcome"],
+  createdAt = new Date().toISOString(),
+): Promise<string> {
+  await mkdir(transcriptDir, { recursive: true });
+  const manifestPath = path.join(transcriptDir, "manifest.json");
+  const manifest: WorkflowTranscriptManifest = {
+    workflow: { name: meta.name, description: meta.description },
+    transcriptDir,
+    createdAt,
+    outcome,
+    transcripts,
+  };
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  return manifestPath;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && /\\babort(?:ed)?\\b/i.test(error.message);
+}
+
 export async function runWorkflow<T = unknown>(
   script: string,
   options: WorkflowRunOptions = {},
 ): Promise<WorkflowRunResult<T>> {
-  if (options.sandbox === "srt" || (options.sandbox === undefined && options.agent === undefined)) {
-    const { runSandboxedWorkflow } = await import("./workflow-worker.js");
-    return runSandboxedWorkflow<T>(script, options);
+  const meta = parseWorkflowScript(script).meta;
+  const transcriptDir = options.transcriptDir
+    ? resolveWorkflowTranscriptDir(options, options.cwd ?? process.cwd(), meta)
+    : undefined;
+  const transcripts: WorkflowAgentTranscript[] = [];
+  const runOptions =
+    transcriptDir || options.onTranscript
+      ? {
+          ...options,
+          onTranscript(info: WorkflowAgentTranscript) {
+            transcripts.push(info);
+            options.onTranscript?.(info);
+          },
+        }
+      : options;
+  const execute = () => {
+    if (runOptions.sandbox === "srt" || (runOptions.sandbox === undefined && runOptions.agent === undefined)) {
+      return import("./workflow-worker.js").then(({ runSandboxedWorkflow }) =>
+        runSandboxedWorkflow<T>(script, runOptions),
+      );
+    }
+    return runWorkflowInProcess<T>(script, runOptions);
+  };
+
+  try {
+    const result = await execute();
+    if (!transcriptDir || runOptions.sharedRuntime) return result;
+    let transcriptManifestPath: string | undefined;
+    try {
+      transcriptManifestPath = await writeWorkflowTranscriptManifest(transcriptDir, result.meta, transcripts, {
+        status: "success",
+      });
+    } catch {
+      // Transcript persistence must never fail a completed workflow.
+    }
+    return { ...result, transcriptDir, transcriptManifestPath, transcripts };
+  } catch (error) {
+    if (transcriptDir && !runOptions.sharedRuntime) {
+      try {
+        await writeWorkflowTranscriptManifest(transcriptDir, meta, transcripts, {
+          status: runOptions.signal?.aborted || isAbortError(error) ? "aborted" : "error",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } catch {
+        // Transcript persistence must never mask the workflow error.
+      }
+    }
+    throw error;
   }
-  return runWorkflowInProcess<T>(script, options);
 }
 
 export async function runWorkflowInProcess<T = unknown>(
@@ -874,6 +984,8 @@ export async function runWorkflowInProcess<T = unknown>(
             }
             runPromise = agentRunner.run(prompt, {
               label,
+              phase: assignedPhase,
+              agentType: agentOptions.agentType,
               // Identifiable name for persisted sessions (persistAgentSessions).
               sessionName: agentOptions.thread
                 ? `workflow:${runId} thread:${agentOptions.thread}`

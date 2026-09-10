@@ -3879,12 +3879,12 @@ test(
   "persistAgentSessions plumbs through the manager into runWorkflow options",
   withTempCwd(async (cwd) => {
     const manager = new WorkflowManager({ cwd, agent: fakeAgent(), persistAgentSessions: true });
-    // The manager forwards the flag on every runWorkflow call; the flag is
-    // captured at construction and defaults to false when omitted.
+    // The manager forwards the flag on every runWorkflow call; transcript
+    // persistence is enabled by default for manifest-backed workflows.
     assert.equal((manager as unknown as { persistAgentSessions: boolean }).persistAgentSessions, true);
 
     const defaulted = new WorkflowManager({ cwd, agent: fakeAgent() });
-    assert.equal((defaulted as unknown as { persistAgentSessions: boolean }).persistAgentSessions, false);
+    assert.equal((defaulted as unknown as { persistAgentSessions: boolean }).persistAgentSessions, true);
 
     // The run still completes normally with the flag set (injected agent
     // runner, so no real session is created here).

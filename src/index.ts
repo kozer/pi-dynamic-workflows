@@ -78,6 +78,12 @@ export { SharedStore } from "./shared-store.js";
 export type { StructuredOutputCapture, StructuredOutputToolOptions } from "./structured-output.js";
 export { createStructuredOutputTool } from "./structured-output.js";
 export {
+  createSubagentTool,
+  registerSubagentCommand,
+  runStandaloneAgent,
+  type SubagentToolOptions,
+} from "./subagent-tool.js";
+export {
   bindSessionDelivery,
   deliverText,
   dropSessionDelivery,
@@ -153,7 +159,7 @@ export {
   registerWorkflowTriggerCommand,
   type WorkflowModeState,
 } from "./workflow-editor.js";
-export type { ManagedRun, WorkflowManagerOptions } from "./workflow-manager.js";
+export type { ManagedRun, StandaloneAgentOptions, WorkflowManagerOptions } from "./workflow-manager.js";
 export { WorkflowManager } from "./workflow-manager.js";
 export type { WorkflowProjectPaths } from "./workflow-paths.js";
 export {

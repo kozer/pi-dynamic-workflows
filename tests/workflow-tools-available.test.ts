@@ -386,7 +386,7 @@ describe("workflow extension - control tool availability", () => {
 
         installExtension(pi);
 
-        assert.deepEqual(registeredTools.slice(0, 2), ["workflow", "workflow_control"]);
+        assert.deepEqual(registeredTools.slice(0, 3), ["workflow", "workflow_control", "subagent"]);
         assert.equal(handlers.session_start.length, 1);
         handlers.session_start[0](
           {},
@@ -401,6 +401,7 @@ describe("workflow extension - control tool availability", () => {
 
         assert.ok(activeTools.includes("workflow"));
         assert.ok(activeTools.includes("workflow_control"));
+        assert.ok(activeTools.includes("subagent"));
 
         handlers.session_shutdown?.[0]?.({ reason: "reload" });
         const staged = takeWorkflowRuntime(process.cwd());

@@ -4,7 +4,7 @@
 
 import { EventEmitter } from "node:events";
 import type { ModelRegistry, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { WorkflowAgent } from "./agent.js";
+import { type AgentRunOptions, type AgentRunResult, WorkflowAgent } from "./agent.js";
 import { type AgentUsage, createEmptyAgentUsage, sumAgentUsage } from "./agent-usage.js";
 import { MAX_AGENTS_PER_RUN } from "./config.js";
 import { preview, recomputeWorkflowSnapshot, type WorkflowAgentSnapshot, type WorkflowSnapshot } from "./display.js";
@@ -23,7 +23,14 @@ import {
   settleNonTerminalPersistedAgents,
   terminalRunInterruptCause,
 } from "./run-persistence.js";
-import { type JournalEntry, parseWorkflowScript, runWorkflow, type WorkflowRunResult } from "./workflow.js";
+import {
+  type JournalEntry,
+  parseWorkflowScript,
+  resolveWorkflowTranscriptDir,
+  runWorkflow,
+  type WorkflowRunResult,
+} from "./workflow.js";
+import { createWorktree, removeWorktree, type Worktree } from "./worktree.js";
 
 /** Per-execution identity for an abort initiated by pause()/stop(). */
 interface LifecycleControl {
@@ -137,6 +144,8 @@ export interface ManagedRun {
    * the default coding tools.
    */
   toolset?: string;
+  /** Directory containing this run's subagent transcripts and manifest. */
+  transcriptDir?: string;
   /**
    * Real per-agent start/end timestamps, captured at onAgentStart/onAgentEnd
    * (never fabricated), keyed by the agent's snapshot id. A running agent has
@@ -187,6 +196,11 @@ export interface ManagedRun {
   agentRetries?: number;
 }
 
+export type StandaloneAgentOptions = AgentRunOptions & {
+  /** Run the direct agent in a temporary Git worktree. */
+  isolation?: "worktree";
+};
+
 /** Per-execution options shared by sync, background, and resume runs. */
 export interface ExecOptions {
   /**
@@ -202,6 +216,8 @@ export interface ExecOptions {
   agentTimeoutMs?: number | null;
   /** Host signal (e.g. tool/Esc) that should abort this run when fired. */
   externalSignal?: AbortSignal;
+  /** Override the directory containing this run's subagent transcripts and manifest. */
+  transcriptDir?: string;
   /** Called with the live snapshot on every progress event. */
   onProgress?: (snapshot: WorkflowSnapshot) => void;
   /** Hard token budget for this run; once spent reaches it, agent() throws. */
@@ -281,7 +297,8 @@ export interface WorkflowManagerOptions {
   excludeSubagentTools?: string[];
   /**
    * Persist each subagent transcript as a real pi session file under the
-   * standard sessions directory. Default false (in-memory, discarded).
+   * workflow transcript directory. Default true; set false to keep sessions
+   * in memory while still retaining manifest metadata.
    */
   persistAgentSessions?: boolean;
   /**
@@ -419,7 +436,7 @@ export class WorkflowManager extends EventEmitter {
     this.defaultTokenBudget = options.defaultTokenBudget ?? null;
     this.toolsets = options.toolsets;
     this.excludeSubagentTools = options.excludeSubagentTools;
-    this.persistAgentSessions = options.persistAgentSessions ?? false;
+    this.persistAgentSessions = options.persistAgentSessions ?? true;
     this.maxTerminalRunsInMemory = options.maxTerminalRunsInMemory ?? DEFAULT_MAX_TERMINAL_RUNS_IN_MEMORY;
     this.persistence = createRunPersistence(this.cwd);
     this.recoverStaleRuns();
@@ -439,6 +456,37 @@ export class WorkflowManager extends EventEmitter {
   /** Project cwd this manager was constructed for (persistence + agent tools). */
   getCwd(): string {
     return this.cwd;
+  }
+
+  /** Run one subagent directly, without creating a workflow run or journal. */
+  async runAgent(prompt: string, options: StandaloneAgentOptions = {}): Promise<AgentRunResult<undefined>> {
+    const { isolation, ...runOptions } = options;
+    const baseCwd = runOptions.cwd ?? this.cwd;
+    let worktree: Worktree | undefined;
+    if (isolation === "worktree") {
+      worktree = await createWorktree(baseCwd, `direct-agent-${generateRunId()}`);
+      if (!worktree.isolated) {
+        throw new Error(`Cannot use worktree isolation: ${worktree.reason ?? "worktree creation failed"}`);
+      }
+    }
+
+    const runner =
+      this.agent ??
+      new WorkflowAgent({
+        cwd: baseCwd,
+        mainModel: this.mainModel,
+        modelRegistry: this.modelRegistry,
+        excludeTools: this.excludeSubagentTools,
+        persistAgentSessions: this.persistAgentSessions,
+      });
+    try {
+      return await runner.run(prompt, {
+        ...runOptions,
+        cwd: worktree?.cwd ?? runOptions.cwd,
+      });
+    } finally {
+      if (worktree) await removeWorktree(worktree);
+    }
   }
 
   /**
@@ -539,7 +587,7 @@ export class WorkflowManager extends EventEmitter {
     this.defaultTokenBudget = options.defaultTokenBudget ?? null;
     this.toolsets = options.toolsets;
     this.excludeSubagentTools = options.excludeSubagentTools;
-    this.persistAgentSessions = options.persistAgentSessions ?? false;
+    this.persistAgentSessions = options.persistAgentSessions ?? true;
   }
 
   /** Set the session's main model (provider/id). Used to auto-tier explore agents. */
@@ -616,6 +664,7 @@ export class WorkflowManager extends EventEmitter {
       agentTimeoutMs: exec.agentTimeoutMs !== undefined ? exec.agentTimeoutMs : this.defaultAgentTimeoutMs,
       concurrency: exec.concurrency !== undefined ? exec.concurrency : this.concurrency,
       agentRetries: exec.agentRetries !== undefined ? exec.agentRetries : this.defaultAgentRetries,
+      transcriptDir: exec.transcriptDir ?? resolveWorkflowTranscriptDir({ args }, this.cwd, parsed.meta),
       agentTimestamps: new Map(),
       agentsById: new Map(),
     };
@@ -643,6 +692,7 @@ export class WorkflowManager extends EventEmitter {
         agentTimeoutMs: managed.agentTimeoutMs,
         concurrency: managed.concurrency,
         agentRetries: managed.agentRetries,
+        transcriptDir: managed.transcriptDir,
       });
     } catch (err) {
       this.releaseRunLease(managed);
@@ -683,6 +733,7 @@ export class WorkflowManager extends EventEmitter {
     managed.agentTimeoutMs = exec.agentTimeoutMs !== undefined ? exec.agentTimeoutMs : this.defaultAgentTimeoutMs;
     managed.concurrency = exec.concurrency !== undefined ? exec.concurrency : this.concurrency;
     managed.agentRetries = exec.agentRetries !== undefined ? exec.agentRetries : this.defaultAgentRetries;
+    managed.transcriptDir = exec.transcriptDir ?? managed.transcriptDir;
     this.runs.set(managed.runId, managed);
     // Persist the initial state immediately so listRuns()/the task panel can see
     // the run the moment it starts, not only after the first agent journals.
@@ -724,6 +775,7 @@ export class WorkflowManager extends EventEmitter {
       journal: [],
       background: false,
       sessionId: this.sessionId,
+      transcriptDir: resolveWorkflowTranscriptDir({ args }, this.cwd, parsed.meta),
       agentTimestamps: new Map(),
       agentsById: new Map(),
     };
@@ -817,6 +869,7 @@ export class WorkflowManager extends EventEmitter {
         mainModel: this.mainModel,
         modelRegistry: this.modelRegistry,
         persistAgentSessions: this.persistAgentSessions,
+        transcriptDir: managed.transcriptDir,
         signal: managed.controller.signal,
         concurrency: resolvedConcurrency,
         agentRetries: resolvedAgentRetries,
@@ -1359,6 +1412,7 @@ export class WorkflowManager extends EventEmitter {
         agentTimeoutMs: managed.agentTimeoutMs,
         concurrency: managed.concurrency,
         agentRetries: managed.agentRetries,
+        transcriptDir: managed.transcriptDir,
         // Set only when this execution actually accepted a provider-limit
         // checkpoint. A late provider result after manual pause/stop must not
         // manufacture a usage-limit resume path from managed.error alone.
@@ -1567,6 +1621,8 @@ export class WorkflowManager extends EventEmitter {
       // resolved unset concurrency/agentRetries before this fix ever existed.
       concurrency: persisted.concurrency !== undefined ? persisted.concurrency : this.concurrency,
       agentRetries: persisted.agentRetries !== undefined ? persisted.agentRetries : this.defaultAgentRetries,
+      transcriptDir:
+        persisted.transcriptDir ?? resolveWorkflowTranscriptDir({ args }, this.cwd, { name: persisted.workflowName }),
       // Fresh per-resume: agents (and any prior timing) are rebuilt live as
       // onAgentStart/onAgentEnd fire again for this attempt (see `agents: []`
       // above); the journal, not this map, is what makes replayed agents cheap.

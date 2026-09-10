@@ -22,6 +22,21 @@ import { type AgentUsage, agentUsageEquals, createEmptyAgentUsage, sumAgentUsage
 
 export type { AgentUsage } from "./agent-usage.js";
 
+export type WorkflowAgentTranscriptStatus = "done" | "error";
+
+export interface WorkflowAgentTranscript {
+  label?: string;
+  phase?: string;
+  agentType?: string;
+  status: WorkflowAgentTranscriptStatus;
+  transcriptPath?: string;
+  sessionId?: string;
+  requestedModel?: string;
+  resolvedModel?: string;
+  thinkingLevel?: NonNullable<CreateAgentSessionOptions["thinkingLevel"]>;
+  error?: string;
+}
+
 import { applyToolPolicy } from "./agent-registry.js";
 import { classifyProviderLimit, WorkflowError, WorkflowErrorCode } from "./errors.js";
 import { canonicalModelSpec, resolveModelSpecWithThinking } from "./model-spec.js";
@@ -240,10 +255,15 @@ export interface WorkflowAgentOptions {
    * that are only available via extension registration.
    */
   modelRegistry?: ModelRegistry;
+  /** Directory for persisted subagent session JSONL transcripts. */
+  transcriptDir?: string;
+  /** Called after each subagent finishes with transcript metadata. */
+  onTranscript?: (info: WorkflowAgentTranscript) => void;
   /**
    * Persist each subagent transcript as a real pi session file under the
    * standard sessions directory (keyed by the runner's project cwd), instead
    * of the default in-memory session that is discarded when the run ends.
+   * Providing transcriptDir enables persistence unless this is explicitly false.
    * Default: false (current behavior).
    */
   persistAgentSessions?: boolean;
@@ -486,6 +506,10 @@ function usageFromSessionProgress(stats: SessionUsageStats, event: AgentSessionE
 
 export interface AgentRunOptions<TSchemaDef extends TSchema | undefined = undefined> {
   label?: string;
+  /** Phase associated with this agent call, used in transcript metadata. */
+  phase?: string;
+  /** Named role definition used by this agent call. */
+  agentType?: string;
   /**
    * Display name recorded on the persisted session (session_info entry) when
    * `persistAgentSessions` is enabled, so transcripts are identifiable in
@@ -591,15 +615,16 @@ export type AgentRunResult<TSchemaDef extends TSchema | undefined> = TSchemaDef 
   : string;
 
 /**
- * Orchestration tools ALWAYS denied to workflow subagents. The `workflow` and
- * `workflow_control` tools are registered globally by the extension, so — unless
+ * Orchestration tools ALWAYS denied to workflow subagents. The `workflow`,
+ * `workflow_control`, and `subagent` tools are registered globally by the
+ * extension, so — unless
  * excluded — a subagent's session sees them and can start its own independent
  * background workflows. Those nested runs recursively fan out and are NOT bounded
  * by the parent run's maxAgents / concurrency / progress / accounting, and can
  * drain a shared provider quota and pile up paused runs (#107). Callers may deny
  * additional tool names via WorkflowAgentOptions.excludeTools.
  */
-export const DEFAULT_EXCLUDED_SUBAGENT_TOOLS = ["workflow", "workflow_control"];
+export const DEFAULT_EXCLUDED_SUBAGENT_TOOLS = ["workflow", "workflow_control", "subagent"];
 /** Process-global subagent id counter: unique across concurrent workflow runs. */
 let workflowAgentSeq = 0;
 
@@ -621,6 +646,8 @@ export class WorkflowAgent {
   private readonly excludeTools: string[];
   private readonly sessionOptions: Partial<CreateAgentSessionOptions>;
   private readonly persistAgentSessions: boolean;
+  private readonly transcriptDir?: string;
+  private readonly onTranscript?: (info: WorkflowAgentTranscript) => void;
   private readonly instructions?: string;
   private readonly mainModel?: string;
   /** Shared registry from the host session, when provided. */
@@ -662,7 +689,9 @@ export class WorkflowAgent {
     this.baseTools = options.tools ?? createCodingTools(this.cwd);
     this.excludeTools = options.excludeTools ?? [];
     this.sessionOptions = options.session ?? {};
-    this.persistAgentSessions = options.persistAgentSessions ?? false;
+    this.transcriptDir = options.transcriptDir;
+    this.onTranscript = options.onTranscript;
+    this.persistAgentSessions = options.persistAgentSessions ?? Boolean(options.transcriptDir);
     this.instructions = options.instructions;
     this.mainModel = options.mainModel;
     this.sharedRegistry = options.modelRegistry;
@@ -791,7 +820,7 @@ export class WorkflowAgent {
       manager = SessionManager.inMemory();
     } else {
       try {
-        manager = SessionManager.create(this.cwd);
+        manager = SessionManager.create(this.cwd, this.transcriptDir);
         this.assertSessionDirWritable(manager.getSessionDir());
         warnPersistSecretsOnce(manager.getSessionDir());
       } catch (error) {
@@ -1044,6 +1073,8 @@ export class WorkflowAgent {
     }
 
     let removeAbortListener: (() => void) | undefined;
+    let transcriptStatus: WorkflowAgentTranscriptStatus = "done";
+    let transcriptError: string | undefined;
     let removeHistoryListener: (() => void) | undefined;
     let removeTurnListener: (() => void) | undefined;
     let lastHistoryEmit = 0;
@@ -1137,6 +1168,10 @@ export class WorkflowAgent {
       }
       threadTurnSucceeded = true;
       return text as AgentRunResult<TSchemaDef>;
+    } catch (error) {
+      transcriptStatus = "error";
+      transcriptError = error instanceof Error ? error.message : String(error);
+      throw error;
     } finally {
       removeAbortListener?.();
       removeHistoryListener?.();
@@ -1160,7 +1195,24 @@ export class WorkflowAgent {
           // Usage is best-effort; never let stats failure mask the real result/error.
         }
       }
+      const transcript: WorkflowAgentTranscript = {
+        label: options.label,
+        phase: options.phase,
+        agentType: options.agentType,
+        status: transcriptStatus,
+        transcriptPath: sessionManager.getSessionFile(),
+        sessionId: sessionManager.getSessionId(),
+        requestedModel: options.model,
+        resolvedModel: session.model ? canonicalModelSpec(session.model) : options.model,
+        thinkingLevel: resolvedThinkingLevel ?? session.thinkingLevel,
+        error: transcriptError,
+      };
       session.dispose();
+      try {
+        this.onTranscript?.(transcript);
+      } catch {
+        // Transcript reporting must never mask the agent result or error.
+      }
     }
   }
 

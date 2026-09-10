@@ -1006,15 +1006,20 @@ test("DEFAULT_EXCLUDED_SUBAGENT_TOOLS denies the recursive orchestration tools (
   // could start independent nested workflows that bypass the parent run's caps.
   // This is the always-on denylist folded into every subagent session; the guard
   // is a regression fence so it can't be silently narrowed.
-  assert.deepEqual(DEFAULT_EXCLUDED_SUBAGENT_TOOLS, ["workflow", "workflow_control"]);
+  assert.deepEqual(DEFAULT_EXCLUDED_SUBAGENT_TOOLS, ["workflow", "workflow_control", "subagent"]);
 });
 
 test("subagentExcludedTools always includes the defaults, plus caller/session names (#107)", () => {
   // This is what run() passes to createAgentSession as excludeTools. Fencing the
   // merge here catches a spread-order regression that drops the defaults — which
   // a deepEqual on the constant alone would miss.
-  assert.deepEqual(subagentExcludedTools(), ["workflow", "workflow_control"]);
-  assert.deepEqual(subagentExcludedTools(["pi-subagents"]), ["workflow", "workflow_control", "pi-subagents"]);
+  assert.deepEqual(subagentExcludedTools(), ["workflow", "workflow_control", "subagent"]);
+  assert.deepEqual(subagentExcludedTools(["pi-subagents"]), [
+    "workflow",
+    "workflow_control",
+    "subagent",
+    "pi-subagents",
+  ]);
   const merged = subagentExcludedTools(["extra"], ["session-denied"]);
   assert.ok(merged.includes("workflow") && merged.includes("workflow_control"), "defaults are never dropped");
   assert.ok(merged.includes("session-denied") && merged.includes("extra"), "both caller lists are folded in");

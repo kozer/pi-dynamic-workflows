@@ -123,6 +123,8 @@ export interface PersistedRunState {
    * /deep-research with web tools) re-resolves the tool set it started with.
    */
   toolset?: string;
+  /** Directory containing this run's subagent transcripts and manifest. */
+  transcriptDir?: string;
   /**
    * The run's resolved cap on total agents, fixed at start (per-run value,
    * else undefined so runWorkflow applies its own MAX_AGENTS_PER_RUN default).

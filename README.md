@@ -214,6 +214,30 @@ function parseOrFlag(text, requiredKeys) {
 
 Prefer `schema` (JSON Schema validation with bounded repair) over ad hoc parsing whenever the result's shape matters downstream.
 
+### Standalone subagents
+
+Use the `subagent` tool or `/agent <prompt>` when one delegated task is enough; no workflow script is required. Pass `agentType` to apply a named role definition, or pass `model`/`tier` for direct model selection. `isolation: "worktree"` runs the task in a temporary Git worktree and fails instead of silently sharing the current tree when isolation cannot be created.
+
+### Creating agent types
+
+Create a Markdown definition in `.pi/agents/` for one project, or `~/.pi/agent/agents/` for all projects. The filename is the fallback name; frontmatter can define the name, model, tools, disallowed tools, and worktree isolation. The Markdown body is the role/personality/task guidance:
+
+```md
+---
+name: reviewer
+description: Checks changes for correctness and regressions
+model: provider/model-id
+# tools: read, grep, cymbal_show
+# disallowedTools: edit, write
+# isolation: worktree
+---
+
+You are a skeptical, concise code reviewer. Find concrete defects first.
+Verify claims against the repository and report file:line evidence.
+```
+
+Use it in a workflow with `agent("Inspect the current change", { agentType: "reviewer" })`. Project definitions override user definitions with the same name. An explicit `model` on the call overrides the definition's model.
+
 The [full documentation](https://quintinshaw.github.io/pi-dynamic-workflows/) covers every option, structured output, determinism, saved workflows, and operational control.
 
 <details>

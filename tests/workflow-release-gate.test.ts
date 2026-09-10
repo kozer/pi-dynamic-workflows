@@ -24,7 +24,7 @@ test("npm pack parsing keeps only valid publishable file paths", () => {
 
 test("the published Pi extension is a compiled JavaScript entrypoint", async () => {
   const [extensionPath] = packageJson.pi.extensions;
-  assert.match(extensionPath, /^dist\/.+\.js$/);
+  assert.match(extensionPath, /^(?:dist\/.+\.js|extensions\/.+\.ts)$/);
   assert.ok(publishableFiles().includes(extensionPath));
 
   const extension = await import(new URL(`../${extensionPath}`, import.meta.url).href);

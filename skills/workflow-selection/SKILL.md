@@ -18,6 +18,8 @@ Choose **direct tools** when the task is:
 - a simple question, explanation, lookup, or deterministic command;
 - a small change where orchestration overhead exceeds the independent work.
 
+Choose the standalone **`subagent`** tool when exactly one bounded delegated task benefits from a separate role, model, or context but does not need orchestration. Use `agentType` when the task needs a named personality or tool policy.
+
 Choose **workflow** when the task has two or more substantially independent work units or benefits from independent evidence, such as:
 
 - broad repository discovery before implementation;
@@ -31,11 +33,12 @@ For ambiguous scope, do the smallest direct inspection needed to decide. Do not 
 
 ## Choose the smallest workflow
 
-1. If the request clearly matches a built-in recipe, call the `workflow` tool with its `name` and `args`; prefer the reviewed recipe over rewriting it.
-2. Otherwise author a bounded JavaScript workflow only when the work needs custom topology. Include a literal `meta` header, at least one `agent()` call, unique labels, bounded concurrency, and explicit verification.
-3. Use `parallel` for independent tasks, `pipeline` for ordered per-item stages, and a final synthesis agent only when results need combining.
-4. Pass enough repository paths and task context to every child. Give children explicit roles and time limits. Treat `null` as missing coverage and report it.
-5. Keep production edits in the parent or an explicitly assigned implementation child according to the active engineering skill. Run focused checks before broad verification.
+1. If one bounded delegation is enough, use `subagent`; reserve `workflow` for multiple agents or orchestration.
+2. If the request clearly matches a built-in recipe, call the `workflow` tool with its `name` and `args`; prefer the reviewed recipe over rewriting it.
+3. Otherwise author a bounded JavaScript workflow only when the work needs custom topology. Include a literal `meta` header, at least one `agent()` call, unique labels, bounded concurrency, and explicit verification.
+4. Use `parallel` for independent tasks, `pipeline` for ordered per-item stages, and a final synthesis agent only when results need combining.
+5. Pass enough repository paths and task context to every child. Give children explicit roles and time limits. Treat `null` as missing coverage and report it.
+6. Keep production edits in the parent or an explicitly assigned implementation child according to the active engineering skill. Run focused checks before broad verification.
 
 ## Completion check
 

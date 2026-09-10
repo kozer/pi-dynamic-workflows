@@ -14,6 +14,7 @@ import {
   type WorkflowReloadRuntime,
 } from "./extension-reload.js";
 import { registerAllSavedWorkflows } from "./saved-commands.js";
+import { createSubagentTool, registerSubagentCommand } from "./subagent-tool.js";
 import {
   bindSessionDelivery,
   dropSessionDelivery,
@@ -170,8 +171,11 @@ export default function extension(pi: ExtensionAPI) {
     },
   });
   const workflowControlTool = createWorkflowControlTool({ getManager });
+  const subagentTool = createSubagentTool({ getManager, getCwd });
   pi.registerTool(workflowTool);
   pi.registerTool(workflowControlTool);
+  pi.registerTool(subagentTool);
+  registerSubagentCommand(pi, getManager, getCwd);
 
   let usageLimitScheduler = new UsageLimitScheduler(manager);
 
@@ -300,7 +304,7 @@ export default function extension(pi: ExtensionAPI) {
     manager.setModelRegistry(ctx.modelRegistry);
 
     const active = pi.getActiveTools();
-    const workflowTools = [workflowTool.name, workflowControlTool.name];
+    const workflowTools = [workflowTool.name, workflowControlTool.name, subagentTool.name];
     const missing = workflowTools.filter((name) => !active.includes(name));
     if (missing.length) pi.setActiveTools([...active, ...missing]);
 
