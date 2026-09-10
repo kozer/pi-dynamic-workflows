@@ -22,7 +22,7 @@ import { loadWorkflowSettings } from "./workflow-settings.js";
 
 /** Model-facing guidance for choosing direct tools versus workflow delegation. */
 export const WORKFLOW_GATE_GUIDELINE =
-  "Choose from task shape, not the word 'workflow': use direct tools for one known file or tightly coupled path; `subagent` for one independent role (research, isolated slice, or diff review); `workflow` for multiple independent roles, multi-file/package scope with separate boundaries, repo-wide discovery, source comparison, multi-perspective review, or parallel verification. For aw-review, delegate multi-file or security/concurrency/data-loss/migration risk; use workflow for multiple review perspectives. Keep coupled edits together, select autonomously, and fall back to direct work if delegation fails.";
+  "Choose from task shape, not the word 'workflow': use direct tools for one known file or tightly coupled path; `subagent` for one independent role (research, isolated slice, or diff review); `workflow` for multiple independent roles, multi-file/package scope with separate boundaries, repo-wide discovery, source comparison, multi-perspective review, or parallel verification. Keep coupled edits together, select autonomously, and fall back to direct work if delegation fails.";
 
 const workflowToolSchema = Type.Object({
   script: Type.Optional(
