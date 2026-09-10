@@ -90,8 +90,8 @@ test("createWorkflowTool gives autonomous delegation guidance", () => {
   const guidance = createWorkflowTool().promptGuidelines;
 
   assert.deepEqual(guidance, [WORKFLOW_GATE_GUIDELINE]);
-  assert.match(guidance[0], /workflow.*autonomously/i);
-  assert.match(guidance[0], /multiple independent agents/i);
+  assert.match(guidance[0], /choose from task shape/i);
+  assert.match(guidance[0], /workflow.*multiple independent roles/i);
   assert.doesNotMatch(guidance[0], /ONLY call it when the user explicitly opts in/i);
   assert.doesNotMatch(guidance[0], /you may briefly offer it/i);
   assert.doesNotMatch(guidance[0], /export const meta|parallel\(\) requires functions/i);

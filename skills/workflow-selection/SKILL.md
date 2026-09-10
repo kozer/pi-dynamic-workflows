@@ -1,47 +1,37 @@
 ---
 name: workflow-selection
-description: Use when deciding how to execute a non-trivial task. Choose direct tools for small/simple work and the `workflow` tool for parallel or decomposable research, implementation, review, or verification.
+description: Use when deciding how to execute work that may span multiple files, roles, or independent checks. Choose direct tools, `subagent`, or `workflow` from observable task shape.
 ---
 
 # Workflow selection
 
-Use this skill at the start of substantive work when the dynamic `workflow` tool is available. This skill owns only the routing decision: direct tools versus workflow, and the smallest workflow shape. `workflow-patterns` owns built-in recipe details; `workflow-authoring` owns JavaScript workflow scripts; `aw-implement`, `aw-review`, and `aw-test` still own their respective engineering processes.
+Use this skill before acting when the task may span files, roles, or independent checks and the delegation tools are available. It owns only route selection; `workflow-patterns` owns built-in recipes, `workflow-authoring` owns workflow JavaScript, and `aw-implement`, `aw-review`, and `aw-test` own their engineering processes.
 
-## Decide from the task
+## Route from observable shape
 
-Do not let the literal presence or absence of the word “workflow” determine the route. Select the execution path from the actual work requested and the repository evidence.
+Do not use “non-trivial” as a threshold and do not wait for the word “workflow”. Inspect the request, likely files, diff, and required checks. Select the smallest route that preserves independent coverage:
 
-Choose **direct tools** when the task is:
+- **Direct tools:** one known file or one tightly coupled call path, one concern, and a local check; also questions, lookups, and deterministic commands.
+- **`subagent`:** one self-contained role that benefits from separate context or an independent opinion, such as reviewing a concrete diff, researching one source, or implementing one isolated slice.
+- **`workflow`:** two or more independently useful roles or axes, or likely scope across multiple files/packages with separate boundaries. Signals include repo-wide discovery, independent source comparison, standards plus security review, parallel verification, or separate inspect/change/verify stages.
 
-- a single known-file read, edit, rename, or deletion;
-- a focused bug fix with a known call path and one or two checks;
-- a simple question, explanation, lookup, or deterministic command;
-- a small change where orchestration overhead exceeds the independent work.
+Multiple files alone do not require a workflow when the changes are tightly coupled and one agent must coordinate them. Conversely, one file may justify delegation when it needs an independent review or separate research.
 
-Choose the standalone **`subagent`** tool when exactly one bounded delegated task benefits from a separate role, model, or context but does not need orchestration. Use `agentType` when the task needs a named personality or tool policy.
+### Review routing
 
-Choose **workflow** when the task has two or more substantially independent work units or benefits from independent evidence, such as:
+For `aw-review`, prefer an independent `subagent` when the concrete diff spans several files, crosses package or architectural boundaries, or carries security, concurrency, data-loss, or migration risk. Use a `workflow` when the review needs multiple independent perspectives (for example correctness, security, and specification coverage). Review directly only when the change is focused and an independent pass would add no useful evidence.
 
-- broad repository discovery before implementation;
-- independent research or source comparison;
-- multi-angle code, security, or architecture review;
-- parallel tests, audits, or verification passes;
-- decomposable implementation with separate inspect, change, and verify work;
-- a large task where bounded subagents reduce context loss or duplicate exploration.
+### Implementation routing
 
-For ambiguous scope, do the smallest direct inspection needed to decide. Do not use a workflow merely because one is available. Do not create subagents for trivial work, conversation, or one deterministic edit.
+For `aw-implement`, keep one tightly coupled vertical slice together. Use a `subagent` for one isolated slice with a clear owner. Use a `workflow` when the confirmed scope contains separately verifiable slices or independent research, implementation, and verification work. Do not split a coupled edit just to avoid doing it in the parent.
 
-## Choose the smallest workflow
+## Execute the selected route
 
-1. If one bounded delegation is enough, use `subagent`; reserve `workflow` for multiple agents or orchestration.
-2. If the request clearly matches a built-in recipe, call the `workflow` tool with its `name` and `args`; prefer the reviewed recipe over rewriting it.
-3. Otherwise author a bounded JavaScript workflow only when the work needs custom topology. Include a literal `meta` header, at least one `agent()` call, unique labels, bounded concurrency, and explicit verification.
-4. Use `parallel` for independent tasks, `pipeline` for ordered per-item stages, and a final synthesis agent only when results need combining.
-5. Pass enough repository paths and task context to every child. Give children explicit roles and time limits. Treat `null` as missing coverage and report it.
-6. Keep production edits in the parent or an explicitly assigned implementation child according to the active engineering skill. Run focused checks before broad verification.
+1. Use `subagent` for one bounded delegation; use `workflow` for multiple agents or orchestration.
+2. Prefer a matching built-in workflow recipe. Otherwise author a bounded JavaScript script with literal `meta`, at least one `agent()` call, unique labels, bounded concurrency, and verification.
+3. Use `parallel` for independent work and `pipeline` for ordered stages. Give each child self-contained context, paths, constraints, and expected output.
+4. Keep production edits with the parent or explicitly assigned implementation child under the active engineering skill. Treat missing child results as missing coverage.
 
 ## Completion check
 
-Before acting, silently identify the reason for the selected path: direct simplicity or workflow decomposition. After a workflow, verify the returned result, child failures, and required checks before reporting completion. If the workflow tool is unavailable or fails closed, continue with direct tools when safe; never pretend that subagents ran.
-
-The user should experience the right execution path rather than being asked to choose an implementation topology.
+Select the route without asking the user to choose its topology. Verify child results and required checks. If delegation is unavailable or fails closed, continue directly when safe and report the coverage gap; never imply that delegation occurred.

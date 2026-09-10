@@ -9,7 +9,7 @@
   "surfaces": {
     "permanentWorkflowPrompt": {
       "serialization": "UTF-8 bytes of LF-joined Pi prompt lines",
-      "bytes": 574
+      "bytes": 780
     },
     "providerVisibleWorkflowToolDefinition": {
       "serialization": "UTF-8 bytes of JSON.stringify({ name, description, parameters })",
@@ -17,7 +17,7 @@
     },
     "registeredSkillsDiscovery": {
       "serialization": "sum of UTF-8 bytes of normalized Pi skill XML (name + description + location) across every root in package.json's pi.skills",
-      "bytes": 1267,
+      "bytes": 1241,
       "skills": [
         {
           "root": "skills/workflow-authoring",
@@ -32,13 +32,13 @@
         {
           "root": "skills/workflow-selection",
           "serialization": "UTF-8 bytes of normalized Pi skill XML with package-relative location",
-          "bytes": 336
+          "bytes": 310
         }
       ]
     },
     "ordinaryWorkflowOwnedAlwaysOn": {
       "serialization": "sum of permanent prompt, provider-visible tool definition, and every registered skill's discovery bytes",
-      "bytes": 6224
+      "bytes": 6404
     },
     "workflowAuthoringSkillCorpus": {
       "serialization": "sum of UTF-8 bytes for every file under skills/workflow-authoring",
