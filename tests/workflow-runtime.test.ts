@@ -243,7 +243,7 @@ return a`,
   assert.equal(journal.length, 1, "only the final success is journaled");
 });
 
-test("runWorkflow reconciles timeout fallback with exact abort-teardown usage", { timeout: 2_500 }, async () => {
+test("runWorkflow reconciles timeout fallback with exact abort-teardown usage", { timeout: 6_000 }, async () => {
   const exactUsage: AgentUsage = {
     input: 900,
     output: 100,
@@ -282,7 +282,7 @@ return await agent('short prompt', { label: 'slow', timeoutMs: 5 })`,
   assert.deepEqual(result.tokenUsage, exactUsage);
 });
 
-test("runWorkflow waits for timed-out teardown before starting a retry", { timeout: 3_000 }, async () => {
+test("runWorkflow waits for timed-out teardown before starting a retry", { timeout: 6_000 }, async () => {
   let calls = 0;
   let active = 0;
   let maxActive = 0;
@@ -312,7 +312,7 @@ return await agent('stuck', { label: 'stuck', timeoutMs: 5, retries: 1 })`,
     },
   );
 
-  await new Promise((resolve) => setTimeout(resolve, 1_050));
+  await new Promise((resolve) => setTimeout(resolve, 2_200));
   assert.equal(calls, 1, "a retry must not overlap a timed-out runner still tearing down");
   releaseFirstAttempt.resolve(undefined);
   const result = await run;

@@ -1,0 +1,133 @@
+{
+  "feature": "v3-hardening-port",
+  "status": "confirmed",
+  "pattern": "Preserve v3 WorkflowManager as the single lifecycle authority and port the v1 security, isolation, recovery, transcript, and selection capabilities into its existing execution and persistence seams.",
+  "observed": [
+    {
+      "path": "src/workflow-manager.ts",
+      "role": "Background lifecycle, persistence, pause/resume, stop, snapshots, and live events",
+      "evidence": "v3.10.1 owns ManagedRun records, RunPersistence, journal replay, lifecycle controls, and manager events used by the panel and navigator."
+    },
+    {
+      "path": "src/workflow.ts",
+      "role": "Workflow script runtime and agent orchestration",
+      "evidence": "v3.10.1 parses and executes workflow scripts, tracks deterministic journals, phases, usage, worktrees, and agent lifecycle callbacks."
+    },
+    {
+      "path": "src/agent.ts",
+      "role": "Host-side subagent sessions, model routing, usage, and transcript ownership",
+      "evidence": "WorkflowAgent owns Pi sessions, model resolution, progress/history, usage, and per-agent execution options."
+    },
+    {
+      "path": "src/workflow-ui.ts",
+      "role": "Interactive navigator",
+      "evidence": "The v3 navigator already renders runs, phases, agents, details, and lifecycle actions."
+    },
+    {
+      "path": "src/task-panel.ts",
+      "role": "Persistent live workflow panel",
+      "evidence": "The v3 task panel consumes manager snapshots and live events."
+    },
+    {
+      "path": "extensions/workflow.ts",
+      "role": "Pi registration and session wiring",
+      "evidence": "The extension registers the workflow manager, tools, commands, panel, and navigator."
+    }
+  ],
+  "proposed": [
+    {
+      "path": "src/sandbox.ts",
+      "role": "SRT policy and adapter",
+      "reason": "Reuse the validated SRT boundary and fail-closed availability/cleanup behavior."
+    },
+    {
+      "path": "src/workflow-worker.ts",
+      "role": "SRT worker protocol",
+      "reason": "Run the existing v3 script runtime outside the Pi process while forwarding validated agent and lifecycle messages."
+    },
+    {
+      "path": "src/workflow.ts",
+      "role": "Hardened in-worker runtime and SRT selection",
+      "reason": "Keep the v3 public runWorkflow seam, add isolated VM/code-generation defenses, and route manager executions through SRT by default."
+    },
+    {
+      "path": "src/worktree.ts",
+      "role": "Strict real Git worktree lifecycle",
+      "reason": "Replace v3 best-effort fallback for write-capable isolation with explicit creation errors and deterministic cleanup."
+    },
+    {
+      "path": "src/workflow-manager.ts",
+      "role": "Recovery and transcript integration",
+      "reason": "Extend the existing manager persistence/journal lifecycle instead of introducing the v1 run-store or competing active-run registry."
+    },
+    {
+      "path": "src/agent.ts",
+      "role": "Durable transcript sessions and compatible usage/model fixes",
+      "reason": "Add optional transcript directory/session metadata while preserving v3 model routing and usage behavior."
+    },
+    {
+      "path": "skills/workflow-selection/SKILL.md",
+      "role": "Model-facing routing guidance",
+      "reason": "Package the direct-tools-versus-workflow selection policy without keyword or effort auto-injection."
+    },
+    {
+      "path": "tests/",
+      "role": "Vertical regression coverage",
+      "reason": "Extend manager, runtime, worktree, transcript, and extension tests through public seams."
+    }
+  ],
+  "dependencies": [
+    {
+      "from": "src/workflow-manager.ts",
+      "to": "src/workflow.ts",
+      "reason": "Manager starts and resumes workflow executions."
+    },
+    {
+      "from": "src/workflow.ts",
+      "to": "src/workflow-worker.ts",
+      "reason": "SRT execution wraps the v3 runtime and bridges agent calls."
+    },
+    {
+      "from": "src/workflow.ts",
+      "to": "src/agent.ts",
+      "reason": "Runtime delegates subagent execution and usage/model callbacks."
+    },
+    {
+      "from": "src/workflow-manager.ts",
+      "to": "src/agent.ts",
+      "reason": "Manager persists agent snapshots, usage, and transcript metadata."
+    },
+    {
+      "from": "src/workflow-ui.ts",
+      "to": "src/workflow-manager.ts",
+      "reason": "Navigator reads manager snapshots and invokes lifecycle controls."
+    },
+    {
+      "from": "src/task-panel.ts",
+      "to": "src/workflow-manager.ts",
+      "reason": "Panel subscribes to manager events and live snapshots."
+    }
+  ],
+  "seams": {
+    "public": [
+      "WorkflowManager.startInBackground/runSync/pause/resume/stop",
+      "runWorkflow(script, options)",
+      "WorkflowAgent.run(prompt, options)",
+      "openWorkflowNavigator()",
+      "createWorkflowTool()",
+      "extensions/workflow.ts"
+    ],
+    "test": [
+      "tests/workflow-manager.test.ts",
+      "tests/workflow-runtime.test.ts",
+      "tests/workflow-ui.test.ts",
+      "tests/task-panel.test.ts",
+      "tests/worktree.test.ts"
+    ]
+  },
+  "confirmation": {
+    "status": "confirmed",
+    "confirmedBy": "user",
+    "confirmedAt": "2026-09-10"
+  }
+}

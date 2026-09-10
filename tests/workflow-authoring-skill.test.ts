@@ -59,11 +59,9 @@ function publishableFiles(): Set<string> {
 }
 
 test("publishable Pi package discovers the workflow-authoring skill and all linked resources", () => {
-  // workflow-patterns (discoverability for the 5 built-in patterns via the
-  // `workflow` tool's `name` input) is a separate, smaller skill — see
-  // skills/workflow-patterns/SKILL.md — and is not part of this skill's
-  // required-resource list below.
-  assert.deepEqual(packageJson.pi.skills, [SKILL_ROOT, "skills/workflow-patterns"]);
+  // These are separate progressive-disclosure skills: workflow-patterns
+  // documents the built-ins, while workflow-selection routes task complexity.
+  assert.deepEqual(packageJson.pi.skills, [SKILL_ROOT, "skills/workflow-patterns", "skills/workflow-selection"]);
   const files = publishableFiles();
   for (const resource of REQUIRED_RESOURCES) assert.ok(files.has(resource), `publishable package omitted ${resource}`);
 

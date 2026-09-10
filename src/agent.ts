@@ -496,6 +496,8 @@ export interface AgentRunOptions<TSchemaDef extends TSchema | undefined = undefi
   schema?: TSchemaDef;
   tools?: ToolDefinition[];
   instructions?: string;
+  /** Optional orchestration timeout forwarded to host adapters; WorkflowAgent itself does not enforce it. */
+  timeoutMs?: number | null;
   signal?: AbortSignal;
   /** Called once before disposal with exact cumulative provider usage, when reported. */
   onUsage?: (usage: AgentUsage) => void;

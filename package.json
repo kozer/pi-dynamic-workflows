@@ -69,7 +69,8 @@
     ],
     "skills": [
       "skills/workflow-authoring",
-      "skills/workflow-patterns"
+      "skills/workflow-patterns",
+      "skills/workflow-selection"
     ],
     "image": "https://raw.githubusercontent.com/QuintinShaw/pi-dynamic-workflows/main/assets/readme/package-cover.png"
   },
@@ -83,7 +84,9 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "acorn": "^8.16.0"
+    "@anthropic-ai/sandbox-runtime": "^0.0.75",
+    "acorn": "^8.16.0",
+    "tsx": "^4.22.3"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.80.8",

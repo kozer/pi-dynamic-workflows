@@ -18,6 +18,7 @@ import { DEFAULT_AGENT_TIMEOUT_MS, MAX_AGENT_RETRIES, MAX_AGENTS_PER_RUN, MAX_CO
 import { WorkflowError, WorkflowErrorCode, wrapError } from "./errors.js";
 import { createWorkflowLogger } from "./logger.js";
 import { parseModelRoutingFromMeta, resolveModelForPhase } from "./model-routing.js";
+import type { SandboxAdapter } from "./sandbox.js";
 import { createAgentStoreTools, SharedStore } from "./shared-store.js";
 import { WORKFLOW_CAPABILITY_CONTRACT, type WorkflowRuntimeImplementations } from "./workflow-capability-contract.js";
 import { createWorktree, removeWorktree, type Worktree } from "./worktree.js";
@@ -167,8 +168,17 @@ export interface WorkflowAgentRunner {
   run(prompt: string, options?: AgentRunOptions<TSchema>): Promise<unknown>;
 }
 
+export interface WorkflowResumeState {
+  agents: Array<{ id: number; label: string; prompt: string; result: unknown }>;
+}
+
 export interface WorkflowRunOptions extends WorkflowAgentOptions {
   args?: unknown;
+  /** Execute through the OS sandbox by default; custom runners stay in-process unless `srt` is explicit. */
+  sandbox?: "srt" | "none";
+  sandboxAdapter?: SandboxAdapter;
+  workerTimeoutMs?: number;
+  resume?: WorkflowResumeState;
   agent?: WorkflowAgentRunner;
   /** The session's main model (provider/id), shown in /workflows for default agents. */
   mainModel?: string;
@@ -434,6 +444,17 @@ const DETERMINISM_PRELUDE = [
 ].join("\n");
 
 export async function runWorkflow<T = unknown>(
+  script: string,
+  options: WorkflowRunOptions = {},
+): Promise<WorkflowRunResult<T>> {
+  if (options.sandbox === "srt" || (options.sandbox === undefined && options.agent === undefined)) {
+    const { runSandboxedWorkflow } = await import("./workflow-worker.js");
+    return runSandboxedWorkflow<T>(script, options);
+  }
+  return runWorkflowInProcess<T>(script, options);
+}
+
+export async function runWorkflowInProcess<T = unknown>(
   script: string,
   options: WorkflowRunOptions = {},
 ): Promise<WorkflowRunResult<T>> {
@@ -858,6 +879,7 @@ export async function runWorkflow<T = unknown>(
                 ? `workflow:${runId} thread:${agentOptions.thread}`
                 : `workflow:${runId} ${label}`,
               schema: agentOptions.schema,
+              timeoutMs: timeout,
               signal: agentController.signal,
               instructions: buildAgentInstructions(assignedPhase, agentOptions, agentDef, resolvedIsolation),
               model: modelSpec,
@@ -1393,16 +1415,58 @@ export async function runWorkflow<T = unknown>(
       error: (m: unknown) => log(`[error] ${String(m)}`),
     },
   } satisfies WorkflowRuntimeImplementations;
-  const { globals: projectGlobals, diagnostics: bindingDiagnostics } =
+  const { diagnostics: bindingDiagnostics } =
     WORKFLOW_CAPABILITY_CONTRACT.assembleRuntimeBindings(runtimeImplementations);
   for (const diagnostic of bindingDiagnostics) logger.warn(diagnostic.message);
-  const context = vm.createContext({
-    ...projectGlobals,
-    // Object/Array/JSON/Math/Date/Promise/Set/Map/etc. come from the vm realm
-    // itself — we deliberately do NOT inject host built-ins, whose .constructor
-    // would be the host Function (a determinism-guard bypass). Math/Date are
-    // neutered in-realm by DETERMINISM_PRELUDE below.
-  });
+
+  let argsJson: string;
+  try {
+    argsJson = JSON.stringify(options.args === undefined ? null : options.args);
+  } catch (error) {
+    throw new WorkflowError(
+      `workflow args must be JSON-safe: ${error instanceof Error ? error.message : String(error)}`,
+      WorkflowErrorCode.SCRIPT_VALIDATION_ERROR,
+      { recoverable: false },
+    );
+  }
+  if (argsJson === undefined) argsJson = "null";
+
+  // Keep host implementations behind VM-created wrappers. Directly injecting a
+  // host callback makes callback.constructor a host Function and allows a
+  // workflow script to escape the VM. The hidden host table is captured only by
+  // VM-realm closures, then removed from globalThis before user code runs.
+  const context = vm.createContext(
+    { __runtime: runtimeImplementations },
+    { codeGeneration: { strings: false, wasm: false } },
+  );
+  const bootstrap = `
+"use strict";
+const __runtime = globalThis.__runtime;
+delete globalThis.__runtime;
+const __clone = (value) => value === undefined ? null : JSON.parse(JSON.stringify(value));
+const __invoke = (name, args) => {
+  const value = __runtime[name](...args);
+  return value && typeof value.then === "function" ? value.then(__clone) : __clone(value);
+};
+for (const name of ["agent", "parallel", "pipeline", "workflow", "verify", "judgePanel", "loopUntilDry", "completenessCheck", "retry", "gate", "checkpoint", "log", "phase"]) {
+  globalThis[name] = (...args) => __invoke(name, args);
+}
+globalThis.args = ${argsJson};
+globalThis.cwd = ${JSON.stringify(options.cwd ?? process.cwd())};
+globalThis.process = Object.freeze({ cwd: () => globalThis.cwd });
+globalThis.budget = Object.freeze({
+  total: __runtime.budget.total,
+  spent: () => __runtime.budget.spent(),
+  remaining: () => __runtime.budget.remaining(),
+});
+globalThis.console = Object.freeze({
+  log: globalThis.log,
+  info: globalThis.log,
+  warn: (message) => globalThis.log("[warn] " + String(message)),
+  error: (message) => globalThis.log("[error] " + String(message)),
+});
+`;
+  new vm.Script(bootstrap, { filename: "__workflow_bootstrap__.js" }).runInContext(context);
 
   const wrapped = `${DETERMINISM_PRELUDE}\n(async () => {\n${body}\n})()`;
   try {
@@ -1417,9 +1481,20 @@ export async function runWorkflow<T = unknown>(
     // Emit final token usage
     options.onTokenUsage?.(shared.tokenUsage);
 
+    let normalizedResult: T;
+    try {
+      normalizedResult = (result === undefined ? null : JSON.parse(JSON.stringify(result))) as T;
+    } catch (error) {
+      throw new WorkflowError(
+        `workflow result must be JSON-safe: ${error instanceof Error ? error.message : String(error)}`,
+        WorkflowErrorCode.SCRIPT_VALIDATION_ERROR,
+        { recoverable: false },
+      );
+    }
+
     return {
       meta,
-      result: result as T,
+      result: normalizedResult,
       logs: state.logs,
       phases: state.phases,
       agentCount: shared.agentCount,
