@@ -33,6 +33,18 @@ export interface WorkflowRuntimeClaim {
   versionMismatch?: WorkflowReloadRuntime;
 }
 
+/**
+ * Check the runtime API required by the current extension generation before
+ * reusing a manager handed over by an older same-version source checkout.
+ * Package versions do not change for every source edit, so a reload can carry
+ * an object created before a newly registered manager method existed.
+ */
+export function isCurrentWorkflowRuntime(runtime: WorkflowReloadRuntime): boolean {
+  return (
+    typeof runtime.manager?.runAgent === "function" && typeof runtime.manager?.reconfigureAfterReload === "function"
+  );
+}
+
 interface HandoffSlot {
   runtime: WorkflowReloadRuntime;
   timer: ReturnType<typeof setTimeout>;

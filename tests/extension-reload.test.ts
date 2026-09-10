@@ -7,6 +7,7 @@ import {
   claimWorkflowRuntime,
   discardWorkflowRuntime,
   handoffWorkflowRuntime,
+  isCurrentWorkflowRuntime,
   pauseStrandedWorkflowRuntime,
   takeWorkflowRuntime,
   WORKFLOW_EXTENSION_VERSION,
@@ -68,6 +69,31 @@ test("reload handoff transfers the exact live runtime once", () => {
   handoffWorkflowRuntime(value);
   assert.equal(takeWorkflowRuntime(cwd), value);
   assert.equal(takeWorkflowRuntime(cwd), undefined, "a second extension generation cannot claim it twice");
+});
+
+test("same-version handoff requires the current manager API", () => {
+  const base = runtime(`/tmp/reload-handoff-${process.pid}-api`);
+  assert.equal(
+    isCurrentWorkflowRuntime({
+      ...base,
+      manager: {
+        getCwd: () => base.cwd,
+        reconfigureAfterReload: () => {},
+      } as unknown as WorkflowReloadRuntime["manager"],
+    }),
+    false,
+  );
+  assert.equal(
+    isCurrentWorkflowRuntime({
+      ...base,
+      manager: {
+        getCwd: () => base.cwd,
+        runAgent: async () => ({ result: undefined }),
+        reconfigureAfterReload: () => {},
+      } as unknown as WorkflowReloadRuntime["manager"],
+    }),
+    true,
+  );
 });
 
 test("a changed package version is rejected and its live runs are paused for recovery", () => {

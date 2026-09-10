@@ -8,6 +8,7 @@ import {
   claimWorkflowRuntime,
   discardWorkflowRuntime,
   handoffWorkflowRuntime,
+  isCurrentWorkflowRuntime,
   pauseStrandedWorkflowRuntime,
   SESSION_REPLACEMENT_REASONS,
   WORKFLOW_EXTENSION_VERSION,
@@ -122,8 +123,15 @@ export default function extension(pi: ExtensionAPI) {
   // whatever is staged; session_start then keeps or rebuilds based on the true
   // session project (manager.getCwd() vs ctx.cwd).
   const runtimeClaim = claimWorkflowRuntime();
-  const previousRuntime = runtimeClaim.compatible;
+  const claimedRuntime = runtimeClaim.compatible;
+  const previousRuntime = claimedRuntime && isCurrentWorkflowRuntime(claimedRuntime) ? claimedRuntime : undefined;
   let pausedForMismatch = runtimeClaim.versionMismatch ? pauseStrandedWorkflowRuntime(runtimeClaim.versionMismatch) : 0;
+  if (claimedRuntime && !previousRuntime) {
+    // A same-version hot reload can hand over a manager from an older source
+    // checkout. Pause its live runs before replacing it instead of letting a
+    // newly registered tool call a method that the old object does not have.
+    pausedForMismatch += pauseStrandedWorkflowRuntime(claimedRuntime);
+  }
 
   // Prefer the claimed manager's own project path for construction defaults
   // when it already points at a real project (not just the launch dir).
