@@ -123,6 +123,15 @@ describe("workflows-models-command", () => {
       );
     });
 
+    it("applies one thinking level to every tier while preserving selected models", async () => {
+      const { applyThinkingToAllTiers } = await import("../src/workflows-models-command.js");
+      assert.deepEqual(
+        applyThinkingToAllTiers({ small: "fast-model", medium: "main-model:low", big: "deep-model:xhigh" }, "high"),
+        { small: "fast-model:high", medium: "main-model:high", big: "deep-model:high" },
+      );
+      assert.deepEqual(applyThinkingToAllTiers({ small: "fast-model:high" }, undefined), { small: "fast-model" });
+    });
+
     it("lets users choose a thinking level for the selected model", async () => {
       const { editSingleTier } = await import("../src/workflows-models-command.js");
       let thinkingOptions: string[] = [];

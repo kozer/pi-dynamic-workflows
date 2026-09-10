@@ -48,7 +48,7 @@ import {
  */
 export function registerWorkflowModelsCommand(pi: ExtensionAPI): void {
   pi.registerCommand("workflows-models", {
-    description: "View and edit model tiers used by workflows (small/medium/big)",
+    description: "View and edit workflow model tiers and thinking levels (small/medium/big)",
     handler: async (_args, ctx) => {
       await ctx.waitForIdle();
 
@@ -91,6 +91,7 @@ export function registerWorkflowModelsCommand(pi: ExtensionAPI): void {
         }
         menuOptions.push("─".repeat(30));
         menuOptions.push("Set one model for all tiers");
+        menuOptions.push("Set thinking for all tiers");
         menuOptions.push(scope === "project" ? "Switch to global" : "Switch to project");
         menuOptions.push("Reset to defaults");
         menuOptions.push(dirty ? "Save and exit" : "Exit");
@@ -116,6 +117,12 @@ export function registerWorkflowModelsCommand(pi: ExtensionAPI): void {
 
         if (choice === "Set one model for all tiers") {
           const updatedTiers = await editAllTiers(ctx, config.tiers);
+          if (updatedTiers !== null) ensureFresh({ ...config, tiers: updatedTiers });
+          continue;
+        }
+
+        if (choice === "Set thinking for all tiers") {
+          const updatedTiers = await editAllThinking(ctx, config.tiers);
           if (updatedTiers !== null) ensureFresh({ ...config, tiers: updatedTiers });
           continue;
         }
@@ -292,6 +299,37 @@ export function applyModelToAllTiers(tiers: Record<string, string>, modelSpec: s
       return [name, formatModelSpecWithThinking(modelSpec, thinkingLevel)];
     }),
   );
+  return updated;
+}
+
+/** Apply one thinking level to every tier while preserving each tier's model. */
+export function applyThinkingToAllTiers(
+  tiers: Record<string, string>,
+  thinkingLevel: ModelThinkingLevel | undefined,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(tiers).map(([name, current]) => {
+      const { modelSpec } = splitModelSpecThinking(current);
+      return [name, formatModelSpecWithThinking(modelSpec, thinkingLevel)];
+    }),
+  );
+}
+
+async function editAllThinking(
+  ctx: ExtensionCommandContext,
+  tiers: Record<string, string>,
+): Promise<Record<string, string> | null> {
+  const thinkingChoice = await ctx.ui.select(
+    "Thinking for all workflow tiers",
+    THINKING_CHOICES.map((choice) => String(choice)),
+  );
+  if (!thinkingChoice) return null;
+
+  const thinkingLevel = fromThinkingChoice(thinkingChoice);
+  const updated = applyThinkingToAllTiers(tiers, thinkingLevel);
+  if (JSON.stringify(updated) === JSON.stringify(tiers)) return null;
+
+  ctx.ui.notify(`All tiers → thinking ${thinkingLevel ?? "session default"}`, "info");
   return updated;
 }
 
