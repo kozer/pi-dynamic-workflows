@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import type { AgentUsage } from "./agent.js";
@@ -637,6 +637,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Locate tsx's ESM loader for the fallback (non-compiled) worker path.
+ *
+ * `require.resolve` alone is not reliable here. Pi loads extensions through its
+ * bundled runtime, where a module's resolution paths do not always include this
+ * package's own `node_modules` — so a bare `require.resolve("tsx/esm")` can fail
+ * with MODULE_NOT_FOUND even when the file is on disk and the same call succeeds
+ * from a plain `node` process. Resolve by explicit path first, keep
+ * `require.resolve` only as a last resort, and fail with an actionable message.
+ */
+function resolveTsxLoader(source: string): string {
+  const packageRoot = dirname(dirname(source));
+  const candidates = [
+    join(packageRoot, "node_modules", "tsx", "dist", "esm", "index.mjs"),
+    join(packageRoot, "node_modules", "tsx", "dist", "esm", "index.cjs"),
+  ];
+  const found = candidates.find((candidate) => existsSync(candidate));
+  if (found) return found;
+  try {
+    return createRequire(import.meta.url).resolve("tsx/esm");
+  } catch {
+    throw new Error(
+      `the workflow sandbox worker needs tsx, but it could not be resolved from ${packageRoot}. ` +
+        "Run `npm install` in that directory, or build the package so dist/workflow-worker.js exists.",
+    );
+  }
+}
+
 function resolveWorkerCommand(workerTempDir: string): { command: string; requiresLocalBinding: boolean } {
   const source = fileURLToPath(new URL("./workflow-worker.ts", import.meta.url));
   const compiledCandidates = [
@@ -650,8 +678,7 @@ function resolveWorkerCommand(workerTempDir: string): { command: string; require
       requiresLocalBinding: false,
     };
   }
-  const require = createRequire(import.meta.url);
-  const tsxLoader = require.resolve("tsx/esm");
+  const tsxLoader = resolveTsxLoader(source);
   return {
     command: `TMPDIR=${shellQuote(workerTempDir)} PI_WORKFLOW_WORKER=1 ${shellQuote(process.execPath)} --import ${shellQuote(tsxLoader)} ${shellQuote(source)}`,
     requiresLocalBinding: false,

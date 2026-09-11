@@ -14,7 +14,7 @@ import {
   tokenFigures,
   type WorkflowSnapshot,
 } from "./display.js";
-import { WorkflowError, WorkflowErrorCode } from "./errors.js";
+import { isAbortError, WorkflowError, WorkflowErrorCode } from "./errors.js";
 import { parseWorkflowScript, type WorkflowRunResult } from "./workflow.js";
 import { WorkflowManager } from "./workflow-manager.js";
 import { createWorkflowStorage, type WorkflowStorage } from "./workflow-saved.js";
@@ -312,6 +312,15 @@ export function createWorkflowTool(options: WorkflowToolOptions = {}): ToolDefin
           }
           snapshot = recomputeWorkflowSnapshot(snapshot);
           display.complete(snapshot);
+          // Not every failure reaching this branch is a user abort: a sandbox worker
+          // that failed to spawn (missing dependency, bad protocol frame, non-zero
+          // exit) surfaces here already classified as one. A bare "Workflow was
+          // aborted" hid the real cause, which then survived only in the persisted
+          // run record. Keep the abort wording only when the error really is one.
+          const detail = error instanceof Error ? error.message.trim() : "";
+          if (detail && !isAbortError(error)) {
+            throw new Error(`Workflow failed: ${detail}`);
+          }
           throw new Error("Workflow was aborted");
         }
         throw error;

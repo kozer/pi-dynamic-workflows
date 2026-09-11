@@ -369,6 +369,49 @@ test(
 );
 
 test(
+  "workflow tool: a spawn failure misclassified as an abort surfaces the real cause",
+  withToolTempCwd(async (cwd) => {
+    const manager = new WorkflowManager({ cwd, agent: toolFakeAgent() });
+    // A sandbox worker that fails to spawn (missing dependency, bad protocol
+    // frame, non-zero exit) escapes runWorkflow as a plain Error, which the
+    // manager reports as WORKFLOW_ABORTED. Reporting that as a bare "Workflow was
+    // aborted" hid the real cause, which then survived only in the run record.
+    manager.runSync = (async () => {
+      throw new WorkflowError("Cannot find module 'tsx/esm'", WorkflowErrorCode.WORKFLOW_ABORTED, {
+        recoverable: true,
+      });
+    }) as typeof manager.runSync;
+    const tool = createWorkflowTool({ cwd, manager });
+    await assert.rejects(
+      () => tool.execute("t1", { script: resumeToolScript, background: false }, undefined, undefined, undefined),
+      (error: Error) => {
+        assert.match(error.message, /^Workflow failed:/, "a spawn failure is not a user abort");
+        assert.match(error.message, /tsx\/esm/, "the underlying cause must reach the tool result");
+        return true;
+      },
+    );
+  }),
+);
+
+test(
+  "workflow tool: a genuine abort still reports as aborted",
+  withToolTempCwd(async (cwd) => {
+    const manager = new WorkflowManager({ cwd, agent: toolFakeAgent() });
+    manager.runSync = (async () => {
+      throw new WorkflowError("workflow aborted", WorkflowErrorCode.WORKFLOW_ABORTED, { recoverable: true });
+    }) as typeof manager.runSync;
+    const tool = createWorkflowTool({ cwd, manager });
+    await assert.rejects(
+      () => tool.execute("t1", { script: resumeToolScript, background: false }, undefined, undefined, undefined),
+      (error: Error) => {
+        assert.equal(error.message, "Workflow was aborted", "real aborts keep the abort wording");
+        return true;
+      },
+    );
+  }),
+);
+
+test(
   "workflow tool: resumeFromRunId pointing at a completed run errors clearly",
   withToolTempCwd(async (cwd) => {
     const manager = new WorkflowManager({ cwd, agent: toolFakeAgent() });
