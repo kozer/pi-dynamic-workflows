@@ -14,6 +14,7 @@ describe("classifyProviderLimit", () => {
       "You have hit your ChatGPT usage limit (plus plan).",
       "Codex usage limit reached (plus plan). Resets in ~3h. Current premium: 5h 100%, weekly 42%.",
       "insufficient_quota",
+      '402: {"message":"Insufficient Balance","type":"unknown_error"}',
       "You exceeded your current quota, please check your plan and billing details.",
       "Error 429: too many requests",
       "rate limit exceeded",

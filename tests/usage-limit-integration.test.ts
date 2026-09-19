@@ -30,6 +30,8 @@ import { WorkflowManager } from "../src/workflow-manager.js";
 import { withFakeHomeAsync } from "./helpers/fake-home.js";
 
 const USAGE_LIMIT_MSG = "Codex usage limit reached (plus plan). Resets in ~3h.";
+const INSUFFICIENT_BALANCE_MSG =
+  '402: {"message":"Insufficient Balance","type":"unknown_error","param":null,"code":"invalid_request_error"}';
 
 /**
  * Run `fn` with an isolated HOME and a scripted faux provider registered on a
@@ -102,6 +104,21 @@ test("a real subagent session that hits a usage limit surfaces PROVIDER_USAGE_LI
         assert.equal(e.recoverable, false, "must halt so the run can checkpoint, not retry-into-the-wall");
         assert.ok(e.message?.includes("usage limit reached"), "carries the real provider message");
         assert.equal(e.resetHint, "Resets in ~3h", "extracts the provider reset hint");
+        return true;
+      },
+    );
+  }));
+
+test("a 402 Insufficient Balance response surfaces PROVIDER_USAGE_LIMIT", () =>
+  withFauxSession(async ({ cwd, model, modelRuntime, setResponses, fauxAssistantMessage }) => {
+    setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: INSUFFICIENT_BALANCE_MSG })]);
+    const agent = new WorkflowAgent({ cwd, session: { model: model as never, modelRuntime } });
+    await assert.rejects(
+      () => agent.run("do the task", { label: "balance" }),
+      (err: unknown) => {
+        const e = err as { code?: string; message?: string };
+        assert.equal(e.code, WorkflowErrorCode.PROVIDER_USAGE_LIMIT);
+        assert.equal(e.message, INSUFFICIENT_BALANCE_MSG);
         return true;
       },
     );
