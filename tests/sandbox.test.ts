@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { createSrtSandboxAdapter, type SandboxAdapter, toSrtSettings } from "../src/sandbox.js";
 import { runWorkflow } from "../src/workflow.js";
 
@@ -17,6 +18,7 @@ test("SRT policy allows the workspace and denies the harness state", () => {
     }),
     {
       filesystem: {
+        allowRead: [],
         allowWrite: ["/workspace", "/tmp/worker"],
         denyRead: ["/workspace/.pi"],
         denyWrite: ["/workspace/.pi"],
@@ -42,6 +44,25 @@ test("the default workflow path runs through SRT and bridges agents", async () =
   );
   assert.deepEqual(result.result, { value: "reply:ping" });
   assert.equal(result.agentCount, 1);
+});
+
+test("the worker runtime remains readable when the workspace denies .pi", () => {
+  const runtimeDir = path.dirname(fileURLToPath(import.meta.url));
+  const runtimeModules = path.join(path.dirname(runtimeDir), "node_modules");
+  assert.deepEqual(
+    toSrtSettings({
+      workspace: os.homedir(),
+      allowRead: [runtimeDir, runtimeModules],
+      denyRead: [path.join(os.homedir(), ".pi")],
+      denyWrite: [path.join(os.homedir(), ".pi")],
+    }).filesystem,
+    {
+      allowRead: [runtimeDir, runtimeModules],
+      allowWrite: [os.homedir()],
+      denyRead: [path.join(os.homedir(), ".pi")],
+      denyWrite: [path.join(os.homedir(), ".pi")],
+    },
+  );
 });
 
 test("malformed worker protocol fails closed and cleans up", async () => {

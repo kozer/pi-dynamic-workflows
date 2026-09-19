@@ -144,10 +144,12 @@ export async function runSandboxedWorkflow<T = unknown>(
   const cwd = resolve(options.cwd ?? process.cwd());
   const workerTempDir = mkdtempSync(join(tmpdir(), "pi-workflow-worker-"));
   const worker = resolveWorkerCommand(workerTempDir);
+  const runtimeDir = dirname(fileURLToPath(import.meta.url));
   const adapter =
     options.sandboxAdapter ??
     createSrtSandboxAdapter({
       workspace: cwd,
+      allowRead: [runtimeDir, join(dirname(runtimeDir), "node_modules")],
       allowWrite: [workerTempDir],
       denyRead: [join(cwd, ".pi")],
       denyWrite: [join(cwd, ".pi")],

@@ -9,6 +9,7 @@ export type SandboxAvailability = { status: "ready" } | { status: "unavailable";
 
 export interface SandboxPolicy {
   workspace: string;
+  allowRead?: readonly string[];
   allowWrite?: readonly string[];
   denyRead?: readonly string[];
   denyWrite?: readonly string[];
@@ -76,6 +77,7 @@ export function createSrtSandboxAdapter(policy: SandboxPolicy, options: SrtAdapt
 export function toSrtSettings(policy: SandboxPolicy) {
   return {
     filesystem: {
+      allowRead: policy.allowRead ?? [],
       allowWrite: [policy.workspace, ...(policy.allowWrite ?? [])],
       denyRead: policy.denyRead ?? [],
       denyWrite: policy.denyWrite ?? [],
