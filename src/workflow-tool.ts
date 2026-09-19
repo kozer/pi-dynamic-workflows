@@ -98,6 +98,12 @@ const workflowToolSchema = Type.Object({
         "Timeout per agent in milliseconds. Omit to use configured `defaultAgentTimeoutMs`; without one, there is no hard timeout. Set only when the user asks to bound time.",
     }),
   ),
+  workerTimeoutMs: Type.Optional(
+    Type.Number({
+      minimum: 1,
+      description: "Timeout for the workflow sandbox worker in milliseconds. Defaults to 300000 (5 minutes).",
+    }),
+  ),
   tokenBudget: Type.Optional(
     Type.Number({
       description:
@@ -124,6 +130,7 @@ export type WorkflowToolInput = {
   concurrency?: number;
   agentRetries?: number;
   agentTimeoutMs?: number;
+  workerTimeoutMs?: number;
   tokenBudget?: number;
   resumeFromRunId?: string;
 };
@@ -232,6 +239,7 @@ export function createWorkflowTool(options: WorkflowToolOptions = {}): ToolDefin
           // Explicit raise only — resume keeps the start-time cap unless the
           // caller passes a higher maxAgents (see WorkflowManager.resume, #146).
           maxAgents: params.maxAgents,
+          workerTimeoutMs: params.workerTimeoutMs,
         });
         if (!resumed) {
           throw new Error(resumeFailureText(manager, runId, params.maxAgents));
@@ -263,6 +271,7 @@ export function createWorkflowTool(options: WorkflowToolOptions = {}): ToolDefin
           concurrency: params.concurrency,
           agentRetries: params.agentRetries,
           agentTimeoutMs: params.agentTimeoutMs,
+          workerTimeoutMs: params.workerTimeoutMs,
           tokenBudget: params.tokenBudget,
           tools: invocationTools,
           toolset: invocationToolset,
@@ -292,6 +301,7 @@ export function createWorkflowTool(options: WorkflowToolOptions = {}): ToolDefin
           concurrency: params.concurrency,
           agentRetries: params.agentRetries,
           agentTimeoutMs: params.agentTimeoutMs,
+          workerTimeoutMs: params.workerTimeoutMs,
           tokenBudget: params.tokenBudget,
           tools: invocationTools,
           toolset: invocationToolset,

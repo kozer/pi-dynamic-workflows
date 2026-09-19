@@ -182,6 +182,8 @@ export interface ManagedRun {
    * CURRENT defaultAgentTimeoutMs.
    */
   agentTimeoutMs?: number | null;
+  /** The run's sandbox worker timeout, fixed at start and carried through resume(). */
+  workerTimeoutMs?: number;
   /**
    * The run's resolved concurrency (per-run value, else the manager's
    * concurrency at the time), fixed at run start/resume for the same reason
@@ -214,6 +216,8 @@ export interface ExecOptions {
   maxAgents?: number;
   /** Per-agent timeout in milliseconds. null/omitted means no hard timeout. */
   agentTimeoutMs?: number | null;
+  /** Sandbox worker timeout in milliseconds. Omit to use its five-minute default. */
+  workerTimeoutMs?: number;
   /** Host signal (e.g. tool/Esc) that should abort this run when fired. */
   externalSignal?: AbortSignal;
   /** Override the directory containing this run's subagent transcripts and manifest. */
@@ -657,6 +661,7 @@ export class WorkflowManager extends EventEmitter {
       // ManagedRun.tokenBudget) so resume keeps start-time semantics.
       tokenBudget: exec.tokenBudget !== undefined ? exec.tokenBudget : this.defaultTokenBudget,
       toolset: exec.toolset,
+      workerTimeoutMs: exec.workerTimeoutMs,
       // Same freeze-at-start pattern as tokenBudget, for the same reason: a
       // resumed run must keep these values, not re-resolve against the
       // manager's current defaults (see ManagedRun doc comments).
@@ -690,6 +695,7 @@ export class WorkflowManager extends EventEmitter {
         toolset: managed.toolset,
         maxAgents: managed.maxAgents,
         agentTimeoutMs: managed.agentTimeoutMs,
+        workerTimeoutMs: managed.workerTimeoutMs,
         concurrency: managed.concurrency,
         agentRetries: managed.agentRetries,
         transcriptDir: managed.transcriptDir,
@@ -728,6 +734,7 @@ export class WorkflowManager extends EventEmitter {
     managed.autoResume = exec.autoResume;
     managed.tokenBudget = exec.tokenBudget !== undefined ? exec.tokenBudget : this.defaultTokenBudget;
     managed.toolset = exec.toolset;
+    managed.workerTimeoutMs = exec.workerTimeoutMs;
     // Same freeze-at-start pattern as tokenBudget (see startInBackground/ManagedRun).
     managed.maxAgents = exec.maxAgents;
     managed.agentTimeoutMs = exec.agentTimeoutMs !== undefined ? exec.agentTimeoutMs : this.defaultAgentTimeoutMs;
@@ -791,6 +798,7 @@ export class WorkflowManager extends EventEmitter {
       resumeJournal,
       maxAgents,
       agentTimeoutMs,
+      workerTimeoutMs,
       externalSignal,
       onProgress,
       tokenBudget,
@@ -815,6 +823,7 @@ export class WorkflowManager extends EventEmitter {
         : agentTimeoutMs !== undefined
           ? agentTimeoutMs
           : this.defaultAgentTimeoutMs;
+    const resolvedWorkerTimeoutMs = managed.workerTimeoutMs ?? workerTimeoutMs;
     const resolvedConcurrency =
       managed.concurrency !== undefined ? managed.concurrency : (concurrency ?? this.concurrency);
     const resolvedAgentRetries =
@@ -875,6 +884,7 @@ export class WorkflowManager extends EventEmitter {
         agentRetries: resolvedAgentRetries,
         maxAgents: resolvedMaxAgents,
         agentTimeoutMs: resolvedAgentTimeoutMs,
+        workerTimeoutMs: resolvedWorkerTimeoutMs,
         tokenBudget: resolvedTokenBudget,
         tools: resolvedTools,
         excludeTools: this.excludeSubagentTools,
@@ -1410,6 +1420,7 @@ export class WorkflowManager extends EventEmitter {
         toolset: managed.toolset,
         maxAgents: managed.maxAgents,
         agentTimeoutMs: managed.agentTimeoutMs,
+        workerTimeoutMs: managed.workerTimeoutMs,
         concurrency: managed.concurrency,
         agentRetries: managed.agentRetries,
         transcriptDir: managed.transcriptDir,
@@ -1493,7 +1504,10 @@ export class WorkflowManager extends EventEmitter {
    * UsageLimitScheduler) unchanged. `opts.args` overrides the persisted args
    * only when provided; otherwise the persisted args are kept.
    */
-  async resume(runId: string, opts?: { script?: string; args?: unknown; maxAgents?: number }): Promise<boolean> {
+  async resume(
+    runId: string,
+    opts?: { script?: string; args?: unknown; maxAgents?: number; workerTimeoutMs?: number },
+  ): Promise<boolean> {
     // Guard: refuse to resume a run that is already running, or one that was
     // intentionally aborted (pause/stop/Esc). Paused and failed runs can restart.
     const active = this.runs.get(runId);
@@ -1615,6 +1629,7 @@ export class WorkflowManager extends EventEmitter {
       // fallback — legacy runs resume with the manager's CURRENT default,
       // matching the only semantics such a run ever had.
       agentTimeoutMs: persisted.agentTimeoutMs !== undefined ? persisted.agentTimeoutMs : this.defaultAgentTimeoutMs,
+      workerTimeoutMs: opts?.workerTimeoutMs ?? persisted.workerTimeoutMs,
       // concurrency/agentRetries have no "explicit opt-out sentinel" the way
       // tokenBudget's null does — a legacy run without a persisted value falls
       // back to the manager's current values, matching how this execution

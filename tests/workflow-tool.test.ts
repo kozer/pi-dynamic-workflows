@@ -189,6 +189,14 @@ test("createWorkflowTool schema describes the configured or unbounded timeout", 
   assert.match(description, /only when the user asks/i);
 });
 
+test("createWorkflowTool schema exposes the five-minute worker timeout default", () => {
+  const tool = createWorkflowTool();
+  const description = parameterDescription(tool, "workerTimeoutMs");
+
+  assert.match(description, /sandbox worker/i);
+  assert.match(description, /300000.*5 minutes/i);
+});
+
 test("createWorkflowTool schema uses the agreed token-budget wording exactly", () => {
   const tool = createWorkflowTool();
   const description = parameterDescription(tool, "tokenBudget");
@@ -276,6 +284,7 @@ test("createWorkflowTool prepareArguments passes through args", () => {
       maxAgents?: number;
       concurrency?: number;
       agentRetries?: number;
+      workerTimeoutMs?: number;
     };
     const result = prepare({
       script: "export const meta = { name: 't', description: 't' }",
@@ -283,12 +292,14 @@ test("createWorkflowTool prepareArguments passes through args", () => {
       maxAgents: 5,
       concurrency: 2,
       agentRetries: 1,
+      workerTimeoutMs: 900_000,
     });
     assert.equal(result.script, "export const meta = { name: 't', description: 't' }");
     assert.deepEqual(result.args, { question: "test" });
     assert.equal(result.maxAgents, 5);
     assert.equal(result.concurrency, 2);
     assert.equal(result.agentRetries, 1);
+    assert.equal(result.workerTimeoutMs, 900_000);
   }
 });
 

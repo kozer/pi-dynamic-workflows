@@ -143,6 +143,8 @@ export interface PersistedRunState {
    * pre-fix resume behavior.
    */
   agentTimeoutMs?: number | null;
+  /** The run's sandbox worker timeout, fixed at start for resume. */
+  workerTimeoutMs?: number;
   /**
    * The run's resolved concurrency, fixed at start (per-run value, else the
    * manager's concurrency at the time). Same rationale as tokenBudget.

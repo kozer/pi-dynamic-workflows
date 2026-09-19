@@ -486,6 +486,7 @@ const capabilities: readonly CapabilityDescriptor[] = [
   toolInput("concurrency", "concurrency?: number", ["runtime clamps to 1..16"]),
   toolInput("agentRetries", "agentRetries?: number = configured value or 0", ["floored and clamped to 0..3"]),
   toolInput("agentTimeoutMs", "agentTimeoutMs?: number = configured default or unbounded"),
+  toolInput("workerTimeoutMs", "workerTimeoutMs?: number = 300000ms (5 minutes)"),
   toolInput("tokenBudget", "tokenBudget?: number = configured default or unlimited", [
     "soft pre-call gate; in-flight work can overshoot",
   ]),

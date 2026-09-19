@@ -44,6 +44,7 @@ const EXPECTED_TOOL_INPUTS = [
   "resumeFromRunId",
   "script",
   "tokenBudget",
+  "workerTimeoutMs",
 ] as const;
 
 function implementations(): Record<string, unknown> {
