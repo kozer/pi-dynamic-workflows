@@ -1929,13 +1929,18 @@ export async function runWorkflowInProcess<T = unknown>(
   const { globals: projectGlobals, diagnostics: bindingDiagnostics } =
     WORKFLOW_CAPABILITY_CONTRACT.assembleRuntimeBindings(runtimeImplementations);
   for (const diagnostic of bindingDiagnostics) logger.warn(diagnostic.message);
-  const context = vm.createContext({
-    ...projectGlobals,
-    // Object/Array/JSON/Math/Date/Promise/Set/Map/etc. come from the vm realm
-    // itself — we deliberately do NOT inject host built-ins, whose .constructor
-    // would be the host Function (a determinism-guard bypass). Math/Date are
-    // neutered in-realm by DETERMINISM_PRELUDE below.
-  });
+  const context = vm.createContext(
+    {
+      ...projectGlobals,
+      // Object/Array/JSON/Math/Date/Promise/Set/Map/etc. come from the vm realm
+      // itself — we deliberately do NOT inject host built-ins, whose .constructor
+      // would be the host Function (a determinism-guard bypass). Math/Date are
+      // neutered in-realm by DETERMINISM_PRELUDE below.
+    },
+    // Deny in-realm string code generation and WebAssembly. Without this a
+    // workflow script can escape the realm via eval/Function/WebAssembly.
+    { codeGeneration: { strings: false, wasm: false } },
+  );
 
   const wrapped = `${DETERMINISM_PRELUDE}\n(async () => {\n${body}\n})()`;
   let runSucceeded = false;
