@@ -5,8 +5,9 @@
 import { EventEmitter } from "node:events";
 import { isDeepStrictEqual } from "node:util";
 import type { ModelRegistry, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { WorkflowAgent } from "./agent.js";
+import { type AgentRunOptions, type AgentRunResult, WorkflowAgent } from "./agent.js";
 import { type AgentUsage, createEmptyAgentUsage, sumAgentUsage } from "./agent-usage.js";
+import { createWorktree, removeWorktree, type Worktree } from "./worktree.js";
 import { MAX_AGENTS_PER_RUN } from "./config.js";
 import {
   emptyFleetSummary,
@@ -247,6 +248,11 @@ export interface ManagedRun {
    */
   phaseBudgets?: Record<string, { budget: number; startSpent: number; warned?: boolean }>;
 }
+
+export type StandaloneAgentOptions = AgentRunOptions & {
+  /** Run the direct agent in a temporary Git worktree. */
+  isolation?: "worktree";
+};
 
 /** Per-execution options shared by sync, background, and resume runs. */
 export interface ExecOptions {
@@ -544,6 +550,37 @@ export class WorkflowManager extends EventEmitter {
   /** Project cwd this manager was constructed for (persistence + agent tools). */
   getCwd(): string {
     return this.cwd;
+  }
+
+  /** Run one subagent directly, without creating a workflow run or journal. */
+  async runAgent(prompt: string, options: StandaloneAgentOptions = {}): Promise<AgentRunResult<undefined>> {
+    const { isolation, ...runOptions } = options;
+    const baseCwd = runOptions.cwd ?? this.cwd;
+    let worktree: Worktree | undefined;
+    if (isolation === "worktree") {
+      worktree = await createWorktree(baseCwd, `direct-agent-${generateRunId()}`);
+      if (!worktree.isolated) {
+        throw new Error(`Cannot use worktree isolation: ${worktree.reason ?? "worktree creation failed"}`);
+      }
+    }
+
+    const runner =
+      this.agent ??
+      new WorkflowAgent({
+        cwd: baseCwd,
+        mainModel: this.mainModel,
+        modelRegistry: this.modelRegistry,
+        excludeTools: this.excludeSubagentTools,
+        persistAgentSessions: this.persistAgentSessions,
+      });
+    try {
+      return await runner.run(prompt, {
+        ...runOptions,
+        cwd: worktree?.cwd ?? runOptions.cwd,
+      });
+    } finally {
+      if (worktree) await removeWorktree(worktree);
+    }
   }
 
   /**

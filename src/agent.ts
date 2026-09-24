@@ -25,6 +25,21 @@ import { pinChildCacheRetention } from "./child-cache-retention.js";
 
 export type { AgentUsage } from "./agent-usage.js";
 
+export type WorkflowAgentTranscriptStatus = "done" | "error";
+
+export interface WorkflowAgentTranscript {
+  label?: string;
+  phase?: string;
+  agentType?: string;
+  status: WorkflowAgentTranscriptStatus;
+  transcriptPath?: string;
+  sessionId?: string;
+  requestedModel?: string;
+  resolvedModel?: string;
+  thinkingLevel?: NonNullable<CreateAgentSessionOptions["thinkingLevel"]>;
+  error?: string;
+}
+
 import { applyToolPolicy } from "./agent-registry.js";
 import { classifyProviderLimit, WorkflowError, WorkflowErrorCode } from "./errors.js";
 import {
@@ -349,6 +364,10 @@ export interface WorkflowAgentOptions {
    * that are only available via extension registration.
    */
   modelRegistry?: ModelRegistry;
+  /** Directory for persisted subagent session JSONL transcripts. */
+  transcriptDir?: string;
+  /** Called after each subagent finishes with transcript metadata. */
+  onTranscript?: (info: WorkflowAgentTranscript) => void;
   /** Persisted host session file used as the parent of persistent child sessions. */
   parentSessionFile?: string;
   /**
@@ -606,6 +625,10 @@ function usageFromSessionProgress(stats: SessionUsageStats, event: AgentSessionE
 
 export interface AgentRunOptions<TSchemaDef extends TSchema | undefined = undefined> {
   label?: string;
+  /** Phase associated with this agent call, used in transcript metadata. */
+  phase?: string;
+  /** Named role definition used by this agent call. */
+  agentType?: string;
   /**
    * Display name recorded on the persisted session (session_info entry) when
    * `persistAgentSessions` is enabled, so transcripts are identifiable in
@@ -616,6 +639,8 @@ export interface AgentRunOptions<TSchemaDef extends TSchema | undefined = undefi
   schema?: TSchemaDef;
   tools?: ToolDefinition[];
   instructions?: string;
+  /** Optional orchestration timeout forwarded to host adapters; WorkflowAgent itself does not enforce it. */
+  timeoutMs?: number | null;
   signal?: AbortSignal;
   /**
    * Called as soon as the child SessionManager is created, before prompting.
@@ -771,6 +796,8 @@ export class WorkflowAgent {
   private readonly providerMiddlewareExtensions: readonly string[];
   private readonly sessionOptions: Partial<CreateAgentSessionOptions>;
   private readonly persistAgentSessions: boolean;
+  private readonly transcriptDir?: string;
+  private readonly onTranscript?: (info: WorkflowAgentTranscript) => void;
   private readonly instructions?: string;
   private readonly mainModel?: string;
   private readonly inheritMainModel: boolean;
@@ -821,7 +848,9 @@ export class WorkflowAgent {
       ...(options.providerMiddlewareExtensions ?? DEFAULT_PROVIDER_MIDDLEWARE_EXTENSIONS),
     ];
     this.sessionOptions = options.session ?? {};
-    this.persistAgentSessions = options.persistAgentSessions ?? false;
+    this.transcriptDir = options.transcriptDir;
+    this.onTranscript = options.onTranscript;
+    this.persistAgentSessions = options.persistAgentSessions ?? Boolean(options.transcriptDir);
     this.instructions = options.instructions;
     this.mainModel = options.mainModel;
     this.inheritMainModel = options.inheritMainModel ?? false;
@@ -1016,7 +1045,7 @@ export class WorkflowAgent {
       manager = SessionManager.inMemory();
     } else {
       try {
-        manager = SessionManager.create(this.cwd);
+        manager = SessionManager.create(this.cwd, this.transcriptDir);
         // SessionManager.create() starts a fresh session without lineage. Reset
         // it before createAgentSession() so the child header records the host
         // session, while retaining the default behavior for ephemeral parents.
@@ -1357,6 +1386,8 @@ export class WorkflowAgent {
     }
 
     let removeAbortListener: (() => void) | undefined;
+    let transcriptStatus: WorkflowAgentTranscriptStatus = "done";
+    let transcriptError: string | undefined;
     let removeHistoryListener: (() => void) | undefined;
     let removeTurnListener: (() => void) | undefined;
     let lastHistoryEmit = 0;
@@ -1464,6 +1495,10 @@ export class WorkflowAgent {
       }
       threadTurnSucceeded = true;
       return text as AgentRunResult<TSchemaDef>;
+    } catch (error) {
+      transcriptStatus = "error";
+      transcriptError = error instanceof Error ? error.message : String(error);
+      throw error;
     } finally {
       removeAbortListener?.();
       removeHistoryListener?.();
@@ -1487,7 +1522,24 @@ export class WorkflowAgent {
           // Usage is best-effort; never let stats failure mask the real result/error.
         }
       }
+      const transcript: WorkflowAgentTranscript = {
+        label: options.label,
+        phase: options.phase,
+        agentType: options.agentType,
+        status: transcriptStatus,
+        transcriptPath: sessionManager.getSessionFile(),
+        sessionId: sessionManager.getSessionId(),
+        requestedModel: options.model,
+        resolvedModel: session.model ? canonicalModelSpec(session.model) : options.model,
+        thinkingLevel: resolvedThinkingLevel ?? session.thinkingLevel,
+        error: transcriptError,
+      };
       await disposeSession();
+      try {
+        this.onTranscript?.(transcript);
+      } catch {
+        // Transcript reporting must never mask the agent result or error.
+      }
     }
   }
 
