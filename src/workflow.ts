@@ -1929,18 +1929,44 @@ export async function runWorkflowInProcess<T = unknown>(
   const { globals: projectGlobals, diagnostics: bindingDiagnostics } =
     WORKFLOW_CAPABILITY_CONTRACT.assembleRuntimeBindings(runtimeImplementations);
   for (const diagnostic of bindingDiagnostics) logger.warn(diagnostic.message);
+  // Keep host implementations behind VM-created wrappers. Injecting a host
+  // callback directly makes callback.constructor the host Function, which lets
+  // a script escape the realm via `log.constructor("return process")()`. The
+  // hidden host table is captured only by realm closures, then removed from
+  // globalThis before any user code runs.
+  const dataGlobals = ["args", "budget", "cwd", "console", "process"];
+  const callableGlobals = Object.keys(projectGlobals).filter((name) => !dataGlobals.includes(name));
   const context = vm.createContext(
-    {
-      ...projectGlobals,
-      // Object/Array/JSON/Math/Date/Promise/Set/Map/etc. come from the vm realm
-      // itself — we deliberately do NOT inject host built-ins, whose .constructor
-      // would be the host Function (a determinism-guard bypass). Math/Date are
-      // neutered in-realm by DETERMINISM_PRELUDE below.
-    },
+    { __runtime: projectGlobals },
     // Deny in-realm string code generation and WebAssembly. Without this a
     // workflow script can escape the realm via eval/Function/WebAssembly.
     { codeGeneration: { strings: false, wasm: false } },
   );
+  const bootstrap = `
+"use strict";
+const __runtime = globalThis.__runtime;
+delete globalThis.__runtime;
+const __clone = (value) => value === undefined ? null : JSON.parse(JSON.stringify(value));
+const __invoke = (name, args) => __runtime[name](...args);
+for (const name of ${JSON.stringify(callableGlobals)}) {
+  globalThis[name] = (...args) => __invoke(name, args);
+}
+globalThis.args = __runtime.args === undefined ? undefined : JSON.parse(JSON.stringify(__runtime.args));
+globalThis.cwd = ${JSON.stringify(options.cwd ?? process.cwd())};
+globalThis.process = Object.freeze({ cwd: () => globalThis.cwd });
+globalThis.budget = Object.freeze({
+  total: __runtime.budget.total,
+  spent: () => __runtime.budget.spent(),
+  remaining: () => __runtime.budget.remaining(),
+});
+globalThis.console = Object.freeze({
+  log: globalThis.log,
+  info: globalThis.log,
+  warn: (message) => globalThis.log("[warn] " + String(message)),
+  error: (message) => globalThis.log("[error] " + String(message)),
+});
+`;
+  new vm.Script(bootstrap, { filename: "__workflow_bootstrap__.js" }).runInContext(context);
 
   const wrapped = `${DETERMINISM_PRELUDE}\n(async () => {\n${body}\n})()`;
   let runSucceeded = false;
