@@ -1959,8 +1959,25 @@ export async function runWorkflowInProcess<T = unknown>(
 "use strict";
 const __runtime = globalThis.__runtime;
 delete globalThis.__runtime;
-const __clone = (value) => value === undefined ? null : JSON.parse(JSON.stringify(value));
-const __invoke = (name, args) => __runtime[name](...args);
+const __clone = (value, seen) => {
+  if (value === null || typeof value !== "object") return value;
+  const marked = seen || new Map();
+  if (marked.has(value)) return marked.get(value);
+  if (Array.isArray(value)) {
+    const arrayCopy = [];
+    marked.set(value, arrayCopy);
+    for (const item of value) arrayCopy.push(__clone(item, marked));
+    return arrayCopy;
+  }
+  const objectCopy = {};
+  marked.set(value, objectCopy);
+  for (const key of Object.keys(value)) objectCopy[key] = __clone(value[key], marked);
+  return objectCopy;
+};
+const __invoke = (name, args) => {
+  const value = __runtime[name](...args);
+  return value && typeof value.then === "function" ? value.then(__clone) : __clone(value);
+};
 for (const name of ${JSON.stringify(callableGlobals)}) {
   globalThis[name] = (...args) => __invoke(name, args);
 }
