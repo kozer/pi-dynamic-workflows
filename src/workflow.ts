@@ -1960,18 +1960,31 @@ export async function runWorkflowInProcess<T = unknown>(
 const __runtime = globalThis.__runtime;
 delete globalThis.__runtime;
 const __clone = (value, seen) => {
-  if (value === null || typeof value !== "object") return value;
+  if (value === null) return null;
+  const kind = typeof value;
+  if (kind === "string" || kind === "number" || kind === "boolean" || kind === "bigint" || kind === "undefined") {
+    return value;
+  }
+  // Never copy a host function or symbol into the realm: a copied host function
+  // is itself an escape lifeline (fn.constructor is the host Function).
+  if (kind !== "object") return undefined;
   const marked = seen || new Map();
   if (marked.has(value)) return marked.get(value);
   if (Array.isArray(value)) {
     const arrayCopy = [];
     marked.set(value, arrayCopy);
-    for (const item of value) arrayCopy.push(__clone(item, marked));
+    for (const item of value) {
+      const itemCopy = __clone(item, marked);
+      if (itemCopy !== undefined) arrayCopy.push(itemCopy);
+    }
     return arrayCopy;
   }
   const objectCopy = {};
   marked.set(value, objectCopy);
-  for (const key of Object.keys(value)) objectCopy[key] = __clone(value[key], marked);
+  for (const key of Object.keys(value)) {
+    const valueCopy = __clone(value[key], marked);
+    if (valueCopy !== undefined) objectCopy[key] = valueCopy;
+  }
   return objectCopy;
 };
 const __invoke = (name, args) => {

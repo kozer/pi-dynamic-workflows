@@ -2521,7 +2521,14 @@ return await agent('x')`;
     },
     persistLogs: false,
   });
-  assert.equal(result.result, poisoned, "the agent call itself succeeded — an eager stringify would have failed it");
+  // The hardened engine clones implementation return values into the workflow
+  // realm so a host object cannot be used as an escape lifeline (see the escape
+  // probes in workflow-security.test.ts). The result is therefore a structural
+  // copy, not the same reference. The guarantee this test exists to protect is
+  // unchanged: toJSON was never invoked (it would have thrown), and the call
+  // still succeeded with real usage committed.
+  assert.equal(typeof result.result, "object", "the agent call succeeded without invoking toJSON");
+  assert.notEqual(result.result, poisoned, "the hardened engine hands back a realm copy, not the host reference");
   assert.equal(result.tokenUsage?.total, 10, "real usage committed without ever stringifying the result");
 });
 
