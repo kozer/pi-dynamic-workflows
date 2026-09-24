@@ -1989,7 +1989,16 @@ const __clone = (value, seen) => {
 };
 const __invoke = (name, args) => {
   const value = __runtime[name](...args);
-  return value && typeof value.then === "function" ? value.then(__clone) : __clone(value);
+  if (value && typeof value.then === "function") {
+    const derived = value.then((resolved) => __clone(resolved));
+    // A script may discard this promise (void agent(...)). Without a handler
+    // the extra hop we introduced would surface its rejection as an unhandled
+    // rejection. Swallowing it here only marks it handled: an awaiting caller
+    // still observes the original rejection.
+    derived.catch(() => undefined);
+    return derived;
+  }
+  return __clone(value);
 };
 for (const name of ${JSON.stringify(callableGlobals)}) {
   globalThis[name] = (...args) => __invoke(name, args);
