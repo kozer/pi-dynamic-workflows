@@ -640,7 +640,7 @@ export async function runWorkflow<T = unknown>(
         }
       : options;
   const execute = () => {
-    if (runOptions.sandbox === "srt") {
+    if (runOptions.sandbox === "srt" || runOptions.sandboxAdapter !== undefined) {
       return import("./workflow-worker.js").then(({ runSandboxedWorkflow }) =>
         runSandboxedWorkflow<T>(script, runOptions),
       );
@@ -673,6 +673,19 @@ export async function runWorkflow<T = unknown>(
     }
     throw error;
   }
+}
+
+/**
+ * True when a value was built inside the workflow's vm realm rather than in the
+ * host realm. Realm objects carry the realm's own Object/Array prototypes, so
+ * they are not deepStrictEqual to host literals with identical structure.
+ * Only such values need converting; a host value (for example one handed back
+ * by an injected runner) must keep its identity untouched.
+ */
+function isForeignRealmValue(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto !== Object.prototype && proto !== Array.prototype && proto !== null;
 }
 
 export async function runWorkflowInProcess<T = unknown>(
@@ -1986,10 +1999,17 @@ globalThis.console = Object.freeze({
       log(`Logs persisted to ${logFile}`);
     }
 
+    // Convert a result constructed inside the hardened realm back into host
+    // values so callers can compare it against ordinary objects. Host values
+    // pass through by reference, preserving upstream's identity contract.
+    // structuredClone (not a JSON round-trip) is deliberate: realm results may
+    // legitimately carry Infinity/undefined (e.g. budget.remaining() with no
+    // cap), which a lossless-JSON validator would reject.
+    const resultValue = isForeignRealmValue(result) ? (structuredClone(result) as T) : (result as T);
     runSucceeded = true;
     successResult = {
       meta,
-      result: result as T,
+      result: resultValue,
       logs: state.logs,
       phases: state.phases,
       agentCount: shared.agentCount,
