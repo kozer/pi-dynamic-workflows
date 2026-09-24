@@ -15,7 +15,6 @@ import {
   type WorkflowAgentTranscript,
 } from "./agent.js";
 import type { AgentHistoryEntry } from "./agent-history.js";
-import type { SandboxAdapter } from "./sandbox.js";
 import {
   type AgentDefinition,
   type AgentRegistry,
@@ -29,6 +28,7 @@ import { WorkflowCheckpointSuspensionError, WorkflowError, WorkflowErrorCode, wr
 import { createWorkflowLogger } from "./logger.js";
 import { parseModelRoutingFromMeta, resolveModelForPhase } from "./model-routing.js";
 import { validateThinkingLevel } from "./model-spec.js";
+import type { SandboxAdapter } from "./sandbox.js";
 import { createAgentStoreTools, SharedStore } from "./shared-store.js";
 import { WORKFLOW_CAPABILITY_CONTRACT, type WorkflowRuntimeImplementations } from "./workflow-capability-contract.js";
 import { createWorktree, removeWorktree, type Worktree } from "./worktree.js";

@@ -7,7 +7,6 @@ import { isDeepStrictEqual } from "node:util";
 import type { ModelRegistry, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type AgentRunOptions, type AgentRunResult, WorkflowAgent } from "./agent.js";
 import { type AgentUsage, createEmptyAgentUsage, sumAgentUsage } from "./agent-usage.js";
-import { createWorktree, removeWorktree, type Worktree } from "./worktree.js";
 import { MAX_AGENTS_PER_RUN } from "./config.js";
 import {
   emptyFleetSummary,
@@ -43,6 +42,7 @@ import {
   type WorkflowCheckpoint,
   type WorkflowRunResult,
 } from "./workflow.js";
+import { createWorktree, removeWorktree, type Worktree } from "./worktree.js";
 
 /** Per-execution identity for an abort initiated by pause()/stop(). */
 interface LifecycleControl {
