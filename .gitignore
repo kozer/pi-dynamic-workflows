@@ -13,3 +13,4 @@ scripts/verify-npm-install.sh
 __pycache__/
 .context/
 .auto/
+.worktrees/
