@@ -14,8 +14,93 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, mock } from "node:test";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { getKeybindings } from "@earendil-works/pi-tui";
 import { getModelTierConfigPath, getProjectModelTierConfigPath } from "../src/model-tier-config.js";
 import { withFakeHomeAsync } from "./helpers/fake-home.js";
+
+const kb = getKeybindings();
+const KEY = {
+  tab: "\t",
+  up: "\x1b[A",
+  down: "\x1b[B",
+  enter: "\r",
+  escape: "\x1b",
+  backspace: "\x7f",
+} as const;
+
+/** A minimal fake Theme — the picker only calls fg() with colors it receives back verbatim. */
+function fakeTheme() {
+  return { fg: (_color: string, text: string) => text };
+}
+
+/** A do-nothing TUI stub (only requestRender is called). */
+const fakeTui = { requestRender: () => {} } as never;
+
+/**
+ * Drive the native-style picker inside ctx.ui.custom: capture the factory's
+ * returned component, expose a harness for input + render inspection, and
+ * resolve when the component calls done().
+ */
+function capturePicker(ctx: { ui: { custom: (factory: unknown) => Promise<string | null> } }): {
+  send: (data: string) => void;
+  rendered: () => string;
+  result: Promise<string | null>;
+} {
+  type PickerComponent = { render: (width: number) => string[]; handleInput: (data: string) => void };
+  let component: PickerComponent | undefined;
+  let resolveDone: (value: string | null) => void = () => {};
+  const result = new Promise<string | null>((resolve) => {
+    resolveDone = resolve;
+  });
+  ctx.ui.custom = (factory: unknown) => {
+    const build = factory as (
+      tui: typeof fakeTui,
+      theme: ReturnType<typeof fakeTheme>,
+      keybindings: typeof kb,
+      done: (v: string | null) => void,
+    ) => PickerComponent;
+    component = build(fakeTui, fakeTheme(), kb, (v: string | null) => resolveDone(v));
+    return result;
+  };
+  return {
+    send: (data: string) => {
+      assert.ok(component, "picker component should be created");
+      component.handleInput(data);
+    },
+    rendered: () => (component ? component.render(80).join("\n") : ""),
+    result,
+  };
+}
+
+/** Registry stub exposing the given specs via getAvailable(). */
+function registryWithSpecs(specs: string[]): unknown {
+  const models = specs.map((spec) => {
+    // Only the first "/" separates the provider — model ids may contain slashes
+    // (e.g. openrouter/moonshotai/kimi-k2.6).
+    const idx = spec.indexOf("/");
+    const provider = spec.slice(0, idx);
+    const id = spec.slice(idx + 1);
+    return {
+      provider,
+      id,
+      name: id,
+      cost: { input: 0, output: 1, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 100000,
+    };
+  });
+  return { getAvailable: () => models, getAll: () => models, find: () => models[0] };
+}
+
+/** editSingleTier with an empty tier map — returns the picked spec directly. */
+async function openPicker(ctx: unknown) {
+  const { editSingleTier } = await import("../src/workflows-models-command.js");
+  // Install the capture before editSingleTier runs: the factory is invoked
+  // synchronously inside ctx.ui.custom.
+  const picker = capturePicker(ctx as never);
+  const flow = editSingleTier(ctx as ExtensionCommandContext, {}, "small");
+  return { picker, flow };
+}
 
 async function loadCommand() {
   const mod = await import("../src/workflows-models-command.js");
@@ -181,6 +266,169 @@ describe("workflows-models-command", () => {
       const result = await editSingleTier(ctx as never, tiers, "small");
       assert.ok(result, "should return updated tiers");
       assert.equal(result.small, "openai/gpt-4.1-mini");
+    });
+  });
+
+  describe("native-style model picker (search + scope)", () => {
+    const SPECS = [
+      "anthropic/claude-opus-4-8",
+      "openai/gpt-5.4",
+      "openai/gpt-5.4-mini",
+      "openrouter/moonshotai/kimi-k2.6",
+      "zai/glm-5.1",
+    ];
+
+    function ctxWith(opts: { scopedModels?: unknown[] } = {}) {
+      return {
+        modelRegistry: registryWithSpecs(SPECS),
+        scopedModels: opts.scopedModels ?? [],
+        ui: {
+          custom: (_factory: unknown) => Promise.resolve(null),
+          select: async () => "Default thinking (session setting)",
+          notify: () => {},
+        },
+      };
+    }
+
+    function scopedCtx(specs: string[]) {
+      const scoped = specs.map((spec) => {
+        const idx = spec.indexOf("/");
+        const provider = spec.slice(0, idx);
+        const id = spec.slice(idx + 1);
+        return { model: { provider, id, name: id } };
+      });
+      return ctxWith({ scopedModels: scoped });
+    }
+
+    it("opens on the scoped view when the session has scoped models", async () => {
+      const ctx = scopedCtx(["openai/gpt-5.4", "zai/glm-5.1"]);
+      const { picker, flow } = await openPicker(ctx);
+      const rendered = picker.rendered();
+      assert.ok(rendered.includes("Scope: "), `scope line should render:\n${rendered}`);
+      // Only scoped entries listed; others from the registry are absent.
+      assert.ok(rendered.includes("gpt-5.4"), `scoped model should show:\n${rendered}`);
+      assert.ok(rendered.includes("glm-5.1"), `scoped model should show:\n${rendered}`);
+      assert.ok(!rendered.includes("claude-opus-4-8"), `unscoped model should be hidden:\n${rendered}`);
+      // Open on scoped (accent applied, but fakeTheme is passthrough): hint text present.
+      assert.ok(rendered.includes("tab scope"), `tab hint should render:\n${rendered}`);
+      void flow;
+    });
+
+    it("opens on the all view with a warning line when no models are scoped", async () => {
+      const ctx = ctxWith();
+      const { picker } = await openPicker(ctx);
+      const rendered = picker.rendered();
+      assert.ok(!rendered.includes("Scope: "), `no scope line when nothing is scoped:\n${rendered}`);
+      assert.ok(
+        rendered.includes("Only showing models from configured providers."),
+        `warning should render:\n${rendered}`,
+      );
+      for (const spec of SPECS) {
+        const id = spec.slice(spec.indexOf("/") + 1);
+        assert.ok(rendered.includes(id), `all-view should list ${id}:\n${rendered}`);
+      }
+    });
+
+    it("fuzzy search filters the list and Enter picks the top match", async () => {
+      const ctx = ctxWith();
+      const { picker, flow } = await openPicker(ctx);
+      picker.send("g");
+      picker.send("l");
+      picker.send("m");
+      const rendered = picker.rendered();
+      assert.ok(rendered.includes("No matching models") === false, `glm match should remain:\n${rendered}`);
+      assert.ok(rendered.includes("glm-5.1"), `query "glm" should keep glm-5.1:\n${rendered}`);
+      assert.ok(!rendered.includes("claude-opus-4-8"), `query should filter others out:\n${rendered}`);
+      picker.send(KEY.enter);
+      const tiers = await flow;
+      assert.equal(tiers?.small, "zai/glm-5.1", "Enter should pick the top fuzzy match");
+    });
+
+    it("search can be cleared with backspace, restoring the full list", async () => {
+      const ctx = ctxWith();
+      const { picker, flow } = await openPicker(ctx);
+      picker.send("kimi");
+      assert.ok(picker.rendered().includes("kimi-k2.6"));
+      for (let i = 0; i < 4; i++) picker.send(KEY.backspace);
+      const rendered = picker.rendered();
+      assert.ok(rendered.includes("gpt-5.4-mini"), `cleared query should restore list:\n${rendered}`);
+      picker.send(KEY.escape);
+      assert.equal(await flow, null);
+    });
+
+    it("Tab toggles between scoped and all views", async () => {
+      const ctx = scopedCtx(["openai/gpt-5.4"]);
+      const { picker, flow } = await openPicker(ctx);
+      // Starts scoped: opus hidden.
+      assert.ok(!picker.rendered().includes("claude-opus-4-8"));
+      picker.send(KEY.tab);
+      // Now all: opus visible.
+      const allView = picker.rendered();
+      assert.ok(allView.includes("claude-opus-4-8"), `Tab should switch to all view:\n${allView}`);
+      assert.ok(allView.includes("gpt-5.4"), `scoped model still visible in all view:\n${allView}`);
+      picker.send(KEY.tab);
+      // Back to scoped: opus hidden again.
+      assert.ok(!picker.rendered().includes("claude-opus-4-8"), `Tab should toggle back:\n${picker.rendered()}`);
+      picker.send(KEY.escape);
+      assert.equal(await flow, null);
+    });
+
+    it("selection lands in the scoped view too — picks the scoped spec", async () => {
+      const ctx = scopedCtx(["openai/gpt-5.4", "zai/glm-5.1"]);
+      const { picker, flow } = await openPicker(ctx);
+      picker.send(KEY.down); // from gpt-5.4 to glm-5.1
+      picker.send(KEY.enter);
+      const tiers = await flow;
+      assert.equal(tiers?.small, "zai/glm-5.1");
+    });
+
+    it("arrows wrap around the list bounds", async () => {
+      const ctx = ctxWith();
+      const { picker, flow } = await openPicker(ctx);
+      // No current model: cursor starts at index 0 (anthropic/claude-opus-4-8).
+      picker.send(KEY.up); // wraps to last: zai/glm-5.1
+      picker.send(KEY.enter);
+      const tiers = await flow;
+      assert.equal(tiers?.small, "zai/glm-5.1");
+    });
+
+    it("cancels with escape and reports no change", async () => {
+      const ctx = ctxWith();
+      const { picker, flow } = await openPicker(ctx);
+      picker.send("openai");
+      picker.send(KEY.escape);
+      assert.equal(await flow, null);
+    });
+
+    it("marks the tier's current model with the check marker and cursor", async () => {
+      const { editSingleTier } = await import("../src/workflows-models-command.js");
+      const ctx = ctxWith();
+      let component: { render: (w: number) => string[]; handleInput: (data: string) => void } | undefined;
+      let resolveDone: (v: string | null) => void = () => {};
+      const donePromise = new Promise<string | null>((resolve) => {
+        resolveDone = resolve;
+      });
+      ctx.ui.custom = (factory: unknown) => {
+        const build = factory as (
+          tui: typeof fakeTui,
+          theme: ReturnType<typeof fakeTheme>,
+          keybindings: typeof kb,
+          done: (v: string | null) => void,
+        ) => typeof component;
+        component = build(fakeTui, fakeTheme(), kb, resolveDone);
+        return donePromise;
+      };
+      const flow = editSingleTier(ctx as never, { small: "openai/gpt-5.4" }, "small");
+      await new Promise((r) => setTimeout(r, 0));
+      assert.ok(component, "picker component should be created");
+      const rendered = component.render(80).join("\n");
+      // The current model sorts first and carries both cursor and check.
+      const line = rendered.split("\n").find((l) => l.includes("gpt-5.4 "));
+      assert.ok(line, `current model should render:\n${rendered}`);
+      assert.ok(line.includes("→"), `cursor on current model:\n${line}`);
+      assert.ok(line.includes("✓"), `check marker on current model:\n${line}`);
+      component.handleInput(KEY.escape);
+      assert.equal(await flow, null);
     });
   });
 

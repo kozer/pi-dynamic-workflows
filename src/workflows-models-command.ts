@@ -14,18 +14,17 @@
  */
 
 import { existsSync } from "node:fs";
-import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
-import {
-  Container,
-  type SelectItem,
-  SelectList,
-  type SelectListTheme,
-  Spacer,
-  Text,
-  type TUI,
-} from "@earendil-works/pi-tui";
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
+  KeybindingsManager,
+  ScopedModel,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
+import { Container, fuzzyFilter, getKeybindings, Input, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
 import { listAvailableModelSpecs, listAvailableModels } from "./agent.js";
 import {
+  canonicalModelSpec,
   formatModelSpecWithThinking,
   type ModelThinkingLevel,
   splitModelSpecThinking,
@@ -148,21 +147,38 @@ export function registerWorkflowModelsCommand(pi: ExtensionAPI): void {
   });
 }
 
-const DEFAULT_THINKING_CHOICE = "Default thinking (session setting)";
-const THINKING_CHOICES = [DEFAULT_THINKING_CHOICE, ...THINKING_LEVELS] as const;
+/**
+ * A model entry in the picker list, mirroring Pi's native /model selector.
+ */
+interface PickerModelEntry {
+  spec: string;
+  provider: string;
+  id: string;
+  name?: string;
+}
 
-function fromThinkingChoice(choice: string | undefined): ModelThinkingLevel | undefined {
-  return THINKING_LEVELS.find((level) => level === choice);
+/** Search-text shape mirrors Pi's `getModelSelectorSearchText` (provider-forward, for proxy IDs). */
+function modelSelectorSearchText(item: PickerModelEntry): string {
+  const name = item.name ? ` ${item.name}` : "";
+  return `${item.provider} ${item.provider}/${item.id} ${item.provider} ${item.id}${name}`;
+}
+
+/** Split `provider/id` spec into parts; tolerates specs without a provider prefix. */
+function specParts(spec: string): { provider: string; id: string } {
+  const idx = spec.indexOf("/");
+  if (idx <= 0) return { provider: "", id: spec };
+  return { provider: spec.slice(0, idx), id: spec.slice(idx + 1) };
 }
 
 /**
- * Interactive editor for a single tier — scrollable model picker plus optional
+ * Interactive editor for a single tier — native-style model picker plus optional
  * thinking-level picker.
  *
- * Uses `ctx.ui.custom()` with Pi TUI's `SelectList` for proper scrollable list
- * with limited visible rows (like `/advisor`). The currently selected base
- * model is shown in the dialog title. After choosing the model, users can set
- * a Pi CLI-style thinking suffix or keep the session default.
+ * The model picker mirrors Pi's built-in /model selector: a live fuzzy search
+ * input, a Tab-toggled "all | scoped" filter (scoped = the host session's
+ * scoped-models list from `ctx.scopedModels`), and native list rendering
+ * (cursor, current marker, provider badges, scroll indicator). When the host
+ * session has scoped models, the picker opens on the scoped view, like /model.
  *
  * Returns the updated tiers object, or null if nothing changed.
  */
@@ -176,56 +192,30 @@ export async function editSingleTier(
   const current = tiers[tierName];
   const currentParts = splitModelSpecThinking(current, knownSpecs);
 
-  // Build SelectItems: all available models as scrollable list
-  const items: SelectItem[] = available.map((m) => ({ value: m, label: m }));
-
-  const selectedModel = await ctx.ui.custom<string | null>((tui: TUI, theme: Theme, _keybindings, done) => {
-    const container = new Container();
-
-    // Title showing current model
-    const titleText = current
-      ? `Pick a model for "${tierName}" (current: ${current})`
-      : `Pick a model for "${tierName}"`;
-    container.addChild(new Text(theme.fg("accent", titleText), 1, 0));
-    container.addChild(new Spacer(1));
-
-    // SelectList theme
-    const selectTheme: SelectListTheme = {
-      selectedPrefix: (t: string) => theme.bg("selectedBg", theme.fg("accent", t)),
-      selectedText: (t: string) => theme.bg("selectedBg", theme.bold(t)),
-      description: (t: string) => theme.fg("muted", t),
-      scrollInfo: (t: string) => theme.fg("dim", t),
-      noMatch: (t: string) => theme.fg("warning", t),
-    };
-
-    const selectList = new SelectList(items, 12, selectTheme);
-
-    // Preselect the current base model even when the stored tier has :thinking.
-    if (currentParts.modelSpec) {
-      const idx = items.findIndex((i) => i.value === currentParts.modelSpec);
-      if (idx >= 0) selectList.setSelectedIndex(idx);
-    }
-
-    // Wire up callbacks
-    selectList.onSelect = (item) => done(item.value);
-    selectList.onCancel = () => done(null);
-
-    container.addChild(selectList);
-    container.addChild(new Spacer(1));
-    container.addChild(
-      new Text(theme.fg("dim", "↑↓ navigate  enter select  esc cancel  · thinking is chosen next"), 1, 0),
-    );
-
-    return {
-      render: (w: number) => container.render(w),
-      invalidate: () => container.invalidate(),
-      handleInput: (data: string) => {
-        selectList.handleInput(data);
-        tui.requestRender();
-      },
-    };
+  // "all" list: every available model, as native-style entries.
+  const allEntries: PickerModelEntry[] = available.map((spec) => {
+    const { provider, id } = specParts(spec);
+    return { spec, provider, id };
   });
 
+  // "scoped" list: the host session's scoped models (same set /scoped-models
+  // manages). Entries missing from the available list (stale scope) are kept —
+  // Pi's native selector keeps refreshed scoped entries too.
+  const scopedModels = readScopedModels(ctx);
+  const availableSet = new Set(allEntries.map((entry) => entry.spec));
+  const scopedEntries: PickerModelEntry[] = scopedModels.map((scoped) => {
+    const spec = canonicalModelSpec(scoped.model);
+    const existing = availableSet.has(spec) ? allEntries.find((entry) => entry.spec === spec) : undefined;
+    if (existing) return existing;
+    return { spec, provider: scoped.model.provider, id: scoped.model.id, name: scoped.model.name };
+  });
+
+  const selectedModel = await pickModelNativeStyle(ctx, {
+    tierName,
+    currentModelSpec: currentParts.modelSpec,
+    allEntries,
+    scopedEntries,
+  });
   if (!selectedModel) return null;
 
   const currentThinkingLabel = currentParts.thinkingLevel ?? DEFAULT_THINKING_CHOICE;
@@ -241,4 +231,216 @@ export async function editSingleTier(
 
   ctx.ui.notify(`"${tierName}" tier → ${result}`, "info");
   return { ...tiers, [tierName]: result };
+}
+
+/** Read the host session's scoped models defensively (older SDKs may lack the getter). */
+function readScopedModels(ctx: ExtensionCommandContext): ScopedModel[] {
+  try {
+    const scoped = (ctx as { scopedModels?: readonly ScopedModel[] }).scopedModels;
+    return scoped ? [...scoped] : [];
+  } catch {
+    return [];
+  }
+}
+
+interface NativePickerOptions {
+  tierName: string;
+  currentModelSpec: string;
+  allEntries: PickerModelEntry[];
+  scopedEntries: PickerModelEntry[];
+}
+
+/**
+ * The native-style picker dialog. Extracted from editSingleTier so the
+ * thinking-level flow and tests stay simple; renders and behaves like Pi's
+ * built-in /model selector.
+ */
+async function pickModelNativeStyle(
+  ctx: ExtensionCommandContext,
+  options: NativePickerOptions,
+): Promise<string | null> {
+  const { tierName, currentModelSpec, allEntries, scopedEntries } = options;
+
+  return ctx.ui.custom<string | null>(
+    (tui: TUI, theme: Theme, _keybindings: KeybindingsManager, done: (result: string | null) => void) => {
+      const container = new Container();
+
+      const titleText = currentModelSpec
+        ? `Pick a model for "${tierName}" (current: ${currentModelSpec})`
+        : `Pick a model for "${tierName}"`;
+      container.addChild(new Text(theme.fg("accent", titleText), 1, 0));
+
+      // Scope line — only when the session actually has scoped models, exactly
+      // like /model: the hint doubles as the current scope display.
+      const hasScoped = scopedEntries.length > 0;
+      let scope = hasScoped ? "scoped" : "all";
+      const scopeColors = () => ({
+        all: theme.fg(scope === "all" ? "accent" : "muted", "all"),
+        scoped: theme.fg(scope === "scoped" ? "accent" : "muted", "scoped"),
+      });
+      let scopeText: Text | undefined;
+      let scopeHintText: Text | undefined;
+      if (hasScoped) {
+        scopeText = new Text("", 0, 0);
+        const renderScopeLine = () => {
+          const colors = scopeColors();
+          scopeText?.setText(`${theme.fg("muted", "Scope: ")}${colors.all}${theme.fg("muted", " | ")}${colors.scoped}`);
+        };
+        renderScopeLine();
+        container.addChild(scopeText);
+        scopeHintText = new Text(theme.fg("dim", "tab scope (all/scoped)"), 0, 0);
+        container.addChild(scopeHintText);
+      } else {
+        container.addChild(new Text(theme.fg("warning", "Only showing models from configured providers."), 0, 0));
+      }
+      container.addChild(new Spacer(1));
+
+      // Search input — type to fuzzy-filter, Enter selects the top match.
+      const searchInput = new Input();
+      searchInput.onSubmit = () => {
+        const filtered = currentFiltered();
+        if (filtered.length > 0) done(filtered[0].spec);
+      };
+      container.addChild(searchInput);
+      container.addChild(new Spacer(1));
+
+      const listContainer = new Container();
+      container.addChild(listContainer);
+      container.addChild(new Spacer(1));
+      container.addChild(new Text(theme.fg("dim", "enter select  esc cancel  · thinking is chosen next"), 1, 0));
+
+      const sortEntries = (entries: PickerModelEntry[]): PickerModelEntry[] => {
+        const sorted = [...entries];
+        sorted.sort((a, b) => {
+          const aIsCurrent = a.spec === currentModelSpec;
+          const bIsCurrent = b.spec === currentModelSpec;
+          if (aIsCurrent && !bIsCurrent) return -1;
+          if (!aIsCurrent && bIsCurrent) return 1;
+          return a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id);
+        });
+        return sorted;
+      };
+      const allSorted = sortEntries(allEntries);
+      const scopedSorted = sortEntries(scopedEntries);
+
+      const activeSorted = () => (scope === "scoped" ? scopedSorted : allSorted);
+      let filtered: PickerModelEntry[] = activeSorted();
+      // Start on the tier's current model (like /model starts on the session's),
+      // computed against the sorted list the cursor actually navigates.
+      let selectedIndex = Math.max(
+        0,
+        filtered.findIndex((entry) => entry.spec === currentModelSpec),
+      );
+
+      const applyFilter = () => {
+        const query = searchInput.getValue();
+        const active = activeSorted();
+        if (query) {
+          filtered = fuzzyFilter(active, query, modelSelectorSearchText);
+        } else {
+          filtered = active;
+        }
+        // With a query, highlight the best match; without, keep position clamped.
+        selectedIndex = query ? 0 : Math.min(selectedIndex, Math.max(0, filtered.length - 1));
+        updateList();
+      };
+      const currentFiltered = () => filtered;
+
+      const updateList = () => {
+        listContainer.clear();
+        const maxVisible = 10;
+        const startIndex = Math.max(
+          0,
+          Math.min(selectedIndex - Math.floor(maxVisible / 2), filtered.length - maxVisible),
+        );
+        const endIndex = Math.min(startIndex + maxVisible, filtered.length);
+        for (let i = startIndex; i < endIndex; i++) {
+          const entry = filtered[i];
+          if (!entry) continue;
+          const isSelected = i === selectedIndex;
+          const isCurrent = entry.spec === currentModelSpec;
+          const cursor = isSelected ? theme.fg("accent", "→ ") : "  ";
+          const currentMarker = isCurrent ? theme.fg("accent", "✓ ") : "  ";
+          const modelText = isSelected ? theme.fg("accent", entry.id) : entry.id;
+          const providerBadge = theme.fg("muted", `[${entry.provider}]`);
+          listContainer.addChild(new Text(`${cursor}${currentMarker}${modelText} ${providerBadge}`, 0, 0));
+        }
+        if (startIndex > 0 || endIndex < filtered.length) {
+          listContainer.addChild(new Text(theme.fg("muted", `  (${selectedIndex + 1}/${filtered.length})`), 0, 0));
+        }
+        if (filtered.length === 0) {
+          listContainer.addChild(new Text(theme.fg("muted", "  No matching models"), 0, 0));
+        }
+      };
+
+      const setScope = (next: "all" | "scoped") => {
+        if (scope === next || scopedEntries.length === 0) return;
+        scope = next;
+        if (scopeText) {
+          const colors = scopeColors();
+          scopeText.setText(`${theme.fg("muted", "Scope: ")}${colors.all}${theme.fg("muted", " | ")}${colors.scoped}`);
+        }
+        // Keep the cursor on the tier's current model when it exists in the new
+        // scope; otherwise clamp.
+        const active = activeSorted();
+        const idx = active.findIndex((entry) => entry.spec === currentModelSpec);
+        selectedIndex = idx >= 0 ? idx : Math.min(selectedIndex, Math.max(0, active.length - 1));
+        applyFilter();
+      };
+
+      updateList();
+
+      return {
+        render: (width: number) => container.render(width),
+        invalidate: () => container.invalidate(),
+        handleInput: (data: string) => {
+          const kb = getKeybindings();
+          // Tab toggles all/scoped — the /model interaction.
+          if (kb.matches(data, "tui.input.tab")) {
+            setScope(scope === "all" ? "scoped" : "all");
+            tui.requestRender();
+            return;
+          }
+          // Up arrow - wrap to bottom when at top
+          if (kb.matches(data, "tui.select.up")) {
+            if (filtered.length === 0) return;
+            selectedIndex = (selectedIndex - 1 + filtered.length) % filtered.length;
+            updateList();
+            tui.requestRender();
+            return;
+          }
+          // Down arrow - wrap to top when at bottom
+          if (kb.matches(data, "tui.select.down")) {
+            if (filtered.length === 0) return;
+            selectedIndex = (selectedIndex + 1) % filtered.length;
+            updateList();
+            tui.requestRender();
+            return;
+          }
+          // Enter picks the highlighted row
+          if (kb.matches(data, "tui.select.confirm")) {
+            const selected = filtered[selectedIndex];
+            if (selected) done(selected.spec);
+            return;
+          }
+          // Escape / Ctrl+C cancels
+          if (kb.matches(data, "tui.select.cancel")) {
+            done(null);
+            return;
+          }
+          // Everything else feeds the search input
+          searchInput.handleInput(data);
+          applyFilter();
+          tui.requestRender();
+        },
+      };
+    },
+  );
+}
+
+const DEFAULT_THINKING_CHOICE = "Default thinking (session setting)";
+const THINKING_CHOICES = [DEFAULT_THINKING_CHOICE, ...THINKING_LEVELS] as const;
+
+function fromThinkingChoice(choice: string | undefined): ModelThinkingLevel | undefined {
+  return THINKING_LEVELS.find((level) => level === choice);
 }
